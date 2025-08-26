@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dr. Oscar Gabriel Vizcaíno Monroy - Perfil Académico</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+            padding: 40px 0;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header .title {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .tab-button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            font-weight: 500;
+        }
+
+        .tab-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .tab-button.active {
+            background: white;
+            color: #1e3a8a;
+            border-color: white;
+        }
+
+        .content-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+            min-height: 600px;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .profile-section {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 40px;
+            align-items: start;
+        }
+
+        .profile-image {
+            text-align: center;
+        }
+
+        .profile-avatar {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1e3a8a, #1e40af);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 4em;
+            color: white;
+            margin: 0 auto 20px;
+            box-shadow: 0 8px 25px rgba(30, 58, 138, 0.3);
+        }
+
+        .contact-info {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+
+        .contact-info h3 {
+            color: #1e3a8a;
+            margin-bottom: 15px;
+        }
+
+        .info-grid {
+            display: grid;
+            gap: 20px;
+        }
+
+        .info-card {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 15px;
+            border-left: 4px solid #1e3a8a;
+        }
+
+        .project-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-top: 20px;
+        }
+
+        .project-card {
+            background: linear-gradient(135deg, #f8f9ff 0%, #e8ecff 100%);
+            padding: 25px;
+            border-radius: 15px;
+            border: 2px solid #e0e5ff;
+            transition: all 0.3s ease;
+        }
+
+        .project-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(30, 58, 138, 0.2);
+        }
+
+        .project-title {
+            color: #1e3a8a;
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .skill-category {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 15px;
+            border-left: 4px solid #1e3a8a;
+        }
+
+        .skill-category h4 {
+            color: #1e3a8a;
+            margin-bottom: 10px;
+        }
+
+        .skill-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .skill-tag {
+            background: #1e3a8a;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .timeline {
+            position: relative;
+            padding: 20px 0;
+        }
+
+        .timeline-item {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            border-left: 4px solid #1e3a8a;
+            position: relative;
+        }
+
+        .timeline-year {
+            color: #1e3a8a;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .publication-item {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            border-left: 4px solid #1e3a8a;
+        }
+
+        .publication-title {
+            color: #333;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .publication-journal {
+            color: #1e3a8a;
+            font-style: italic;
+            margin-bottom: 5px;
+        }
+
+        .hobbies-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .hobby-card {
+            background: linear-gradient(135deg, #f8f9ff 0%, #e8ecff 100%);
+            padding: 30px 20px;
+            border-radius: 15px;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .hobby-card:hover {
+            transform: scale(1.05);
+        }
+
+        .hobby-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 768px) {
+            .profile-section {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+            
+            .project-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .content-card {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Dr. Oscar Gabriel Vizcaíno Monroy</h1>
+            <div class="title">Profesor-Investigador | Doctor en Tecnologías de Información</div>
+            <div class="title">Universidad Autónoma de Nayarit</div>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="tab-button active" onclick="showTab('perfil')">Perfil</button>
+            <button class="tab-button" onclick="showTab('investigacion')">Investigación</button>
+            <button class="tab-button" onclick="showTab('proyectos')">Proyectos Actuales</button>
+            <button class="tab-button" onclick="showTab('habilidades')">Habilidades</button>
+            <button class="tab-button" onclick="showTab('trayectoria')">Trayectoria</button>
+            <button class="tab-button" onclick="showTab('publicaciones')">Publicaciones</button>
+            <button class="tab-button" onclick="showTab('intereses')">Intereses</button>
+        </div>
+
+        <div class="content-card">
+            <!-- PERFIL -->
+            <div class="tab-content active" id="perfil">
+                <div class="profile-section">
+                    <div class="profile-image">
+                        <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCADIAMgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD//Z" alt="Dr. Oscar Gabriel Vizcaíno Monroy" style="width: 200px; height: 200px; border-radius: 50%; object-fit: cover; margin: 0 auto 20px; box-shadow: 0 8px 25px rgba(30, 58, 138, 0.3);">
+                        <div class="contact-info">
+                            <h3>Contacto</h3>
+                            <p><strong>Email:</strong> oscar.vizcaino@uan.edu.mx</p>
+                            <p><strong>Teléfono:</strong> 311 110 51 49</p>
+                            <p><strong>ORCID:</strong> 0000-0003-0587-0008</p>
+                            <p><strong>Ubicación:</strong> Tepic, Nayarit</p>
+                        </div>
+                    </div>
+                    <div class="profile-info">
+                        <h2 style="color: #667eea; margin-bottom: 20px;">Acerca de mí</h2>
+                        <p style="line-height: 1.8; margin-bottom: 20px;">
+                            Soy Profesor-Investigador adscrito a la Unidad Académica de Economía de la Universidad Autónoma de Nayarit. Mi formación y trayectoria se sitúan en la convergencia entre la tecnología, las ciencias de datos y el desarrollo social.
+                        </p>
+                        <p style="line-height: 1.8; margin-bottom: 20px;">
+                            Mi línea de investigación se centra en las aplicaciones de tecnologías disruptivas orientadas a la salud, el bienestar social y el desarrollo regional. Como co-inventor de la patente "Aparato rehabilitador del síndrome del Túnel Carpiano", he articulado conocimientos en ingeniería, análisis de datos y diseño computacional para atender necesidades del ámbito clínico.
+                        </p>
+                        
+                        <div class="info-grid">
+                            <div class="info-card">
+                                <h4>🎓 Formación Académica</h4>
+                                <ul style="margin-top: 10px; line-height: 1.6;">
+                                    <li><strong>Doctorado:</strong> Tecnologías de Información (Universidad de Guadalajara)</li>
+                                    <li><strong>Maestría:</strong> Desarrollo Económico Local (UAN)</li>
+                                    <li><strong>Ingeniería:</strong> Sistemas Computacionales (Tecnológico de Tepic)</li>
+                                </ul>
+                            </div>
+                            <div class="info-card">
+                                <h4>🏆 Reconocimientos</h4>
+                                <ul style="margin-top: 10px; line-height: 1.6;">
+                                    <li>Candidato SNI (2026-2029)</li>
+                                    <li>Perfil PRODEP</li>
+                                    <li>CA Consolidado "Nuevas Tecnologías Aplicadas a la Educación"</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- INVESTIGACIÓN -->
+            <div class="tab-content" id="investigacion">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Líneas de Investigación</h2>
+                
+                <div class="info-grid">
+                    <div class="info-card">
+                        <h4>🧠 Tecnologías Disruptivas en Salud</h4>
+                        <p>Aplicación de inteligencia artificial y análisis de datos para mejorar la calidad de vida y el bienestar social, con énfasis en soluciones accesibles y de bajo costo.</p>
+                    </div>
+                    <div class="info-card">
+                        <h4>🏙️ Desarrollo Regional</h4>
+                        <p>Análisis del proceso de urbanización y desarrollo económico de municipios, utilizando técnicas de minería de datos y modelado computacional.</p>
+                    </div>
+                    <div class="info-card">
+                        <h4>🎓 Tecnología Educativa</h4>
+                        <p>Implementación de herramientas digitales y sistemas inteligentes para mejorar los procesos de enseñanza-aprendizaje y la inclusión educativa.</p>
+                    </div>
+                    <div class="info-card">
+                        <h4>💡 Innovación Tecnológica</h4>
+                        <p>Desarrollo de prototipos y soluciones tecnológicas que integran hardware y software para resolver problemas específicos del ámbito clínico y social.</p>
+                    </div>
+                </div>
+
+                <h3 style="color: #667eea; margin-top: 40px; margin-bottom: 20px;">Área de Conocimiento</h3>
+                <div class="info-card">
+                    <p><strong>Área:</strong> Interdisciplinaria</p>
+                    <p><strong>Campo:</strong> Ciencias Tecnológicas</p>
+                    <p><strong>Disciplina:</strong> Otras Especialidades Tecnológicas</p>
+                </div>
+            </div>
+
+            <!-- PROYECTOS ACTUALES -->
+            <div class="tab-content" id="proyectos">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Proyectos de Investigación Actuales</h2>
+                
+                <div class="project-grid">
+                    <div class="project-card">
+                        <div class="project-title">🤖 Laboratorio de IA y Ciencias de Datos UAN</div>
+                        <p><strong>Objetivo:</strong> Diseñar e implementar un laboratorio de vanguardia para el estudio y desarrollo de Inteligencia Artificial y Ciencia de Datos aplicados a problemas reales de la región.</p>
+                        <p><strong>Periodo:</strong> 06/25 - 06/27</p>
+                        <p><strong>Características:</strong></p>
+                        <ul style="margin-top: 10px; line-height: 1.6;">
+                            <li>Centro de innovación tecnológica y formación</li>
+                            <li>Enfoque en IA responsable y explicable (XAI)</li>
+                            <li>Aplicaciones en salud, educación y gobierno</li>
+                            <li>Vinculación con sectores externos</li>
+                        </ul>
+                    </div>
+
+                    <div class="project-card">
+                        <div class="project-title">🧠 PANEG: Análisis Neurocognitivo en la Era de IA</div>
+                        <p><strong>Objetivo:</strong> Analizar el impacto de la exposición controlada a herramientas de IA Generativa en el rendimiento neurocognitivo de personas adultas.</p>
+                        <p><strong>Periodo:</strong> 06/25 - 06/27</p>
+                        <p><strong>Metodología:</strong></p>
+                        <ul style="margin-top: 10px; line-height: 1.6;">
+                            <li>Diseño cuasi-experimental con lógica DoE</li>
+                            <li>Uso de la prueba MoCA</li>
+                            <li>Enfoque mixto (cuantitativo + cualitativo)</li>
+                            <li>Análisis de funciones ejecutivas y memoria</li>
+                        </ul>
+                    </div>
+
+                    <div class="project-card">
+                        <div class="project-title">🏥 Aparato Rehabilitador Túnel Carpiano</div>
+                        <p><strong>Estado:</strong> Patente Otorgada (2020007713)</p>
+                        <p><strong>Descripción:</strong> Dispositivo ergonómico para la rehabilitación del síndrome del túnel carpiano, diseñado para uso doméstico sin supervisión profesional constante.</p>
+                        <p><strong>Impacto:</strong></p>
+                        <ul style="margin-top: 10px; line-height: 1.6;">
+                            <li>Solución accesible y de bajo costo</li>
+                            <li>Aplicable en sistemas de salud públicos y privados</li>
+                            <li>Integra conocimientos multidisciplinarios</li>
+                        </ul>
+                    </div>
+
+                    <div class="project-card">
+                        <div class="project-title">📊 Inclusión Educativa y Barreras Estructurales</div>
+                        <p><strong>Colaboración:</strong> UAA, UJAT, UCOL</p>
+                        <p><strong>Enfoque:</strong> Identificación de barreras que limitan el acceso educativo de poblaciones con discapacidad utilizando minería de datos y aprendizaje automático.</p>
+                        <p><strong>Contribución:</strong></p>
+                        <ul style="margin-top: 10px; line-height: 1.6;">
+                            <li>Diseño de indicadores</li>
+                            <li>Procesamiento de bases de datos</li>
+                            <li>Validación de modelos predictivos</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HABILIDADES -->
+            <div class="tab-content" id="habilidades">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Competencias Técnicas y Habilidades</h2>
+                
+                <div class="skills-grid">
+                    <div class="skill-category">
+                        <h4>💻 Lenguajes de Programación</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">Python</span>
+                            <span class="skill-tag">R</span>
+                            <span class="skill-tag">CLIPS</span>
+                        </div>
+                    </div>
+
+                    <div class="skill-category">
+                        <h4>📊 Análisis de Datos</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">RapidMiner</span>
+                            <span class="skill-tag">Power BI</span>
+                            <span class="skill-tag">MongoDB</span>
+                            <span class="skill-tag">SPSS</span>
+                        </div>
+                    </div>
+
+                    <div class="skill-category">
+                        <h4>📈 Análisis Bibliométrico</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">VOSviewer</span>
+                            <span class="skill-tag">Bibliometrix</span>
+                            <span class="skill-tag">OpenAlex</span>
+                        </div>
+                    </div>
+
+                    <div class="skill-category">
+                        <h4>🔧 Desarrollo y Diseño</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">SolidWorks</span>
+                            <span class="skill-tag">Arduino</span>
+                        </div>
+                    </div>
+
+                    <div class="skill-category">
+                        <h4>🤖 Inteligencia Artificial</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">ChatGPT</span>
+                            <span class="skill-tag">Claude</span>
+                            <span class="skill-tag">Gemini</span>
+                            <span class="skill-tag">DeepSeek</span>
+                            <span class="skill-tag">SciSpace</span>
+                        </div>
+                    </div>
+
+                    <div class="skill-category">
+                        <h4>📚 Gestores Bibliográficos</h4>
+                        <div class="skill-tags">
+                            <span class="skill-tag">Zotero</span>
+                            <span class="skill-tag">Mendeley</span>
+                            <span class="skill-tag">Citavi</span>
+                        </div>
+                    </div>
+                </div>
+
+                <h3 style="color: #667eea; margin-top: 40px; margin-bottom: 20px;">Áreas de Expertise</h3>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <h4>🎯 Especialidades Principales</h4>
+                        <ul style="line-height: 1.6;">
+                            <li>Aplicación de tecnologías disruptivas en salud</li>
+                            <li>Análisis de datos en educación y desarrollo económico</li>
+                            <li>Desarrollo de modelos computacionales para investigación</li>
+                            <li>Implementación de IA responsable</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TRAYECTORIA -->
+            <div class="tab-content" id="trayectoria">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Trayectoria Académica y Profesional</h2>
+                
+                <div class="timeline">
+                    <div class="timeline-item">
+                        <div class="timeline-year">2008 - Presente</div>
+                        <h4>Profesor-Investigador - Universidad Autónoma de Nayarit</h4>
+                        <p>Desarrollo de investigación aplicada en tecnologías disruptivas, análisis de datos y desarrollo regional. Impartición de cursos especializados en IA, minería de datos y sistemas inteligentes.</p>
+                    </div>
+
+                    <div class="timeline-item">
+                        <div class="timeline-year">2022</div>
+                        <h4>Grado en Consolidación del Cuerpo Académico</h4>
+                        <p>Integración del CA "Nuevas Tecnologías Aplicadas a la Educación" en consolidación, contribuyendo al fortalecimiento educativo mediante investigación y programas innovadores.</p>
+                    </div>
+
+                    <div class="timeline-item">
+                        <div class="timeline-year">2020</div>
+                        <h4>Patente Otorgada</h4>
+                        <p>Co-invención del "Aparato rehabilitador del síndrome del Túnel Carpiano", demostrando la convergencia entre ciencia de datos e innovación tecnológica.</p>
+                    </div>
+
+                    <div class="timeline-item">
+                        <div class="timeline-year">2016</div>
+                        <h4>Reconocimiento Perfil Deseable PRODEP</h4>
+                        <p>Reconocimiento por cumplir satisfactoriamente las funciones universitarias de docencia, investigación y vinculación.</p>
+                    </div>
+
+                    <div class="timeline-item">
+                        <div class="timeline-year">2011</div>
+                        <h4>Estancia de Investigación - Universidad Autónoma de Aguascalientes</h4>
+                        <p>Participación en el V Coloquio de Investigación Nacional e Internacional de Cuerpos Académicos. Fundador de la Red de Investigación "Red de Desarrollo Local, Sustentabilidad y Calidad de Vida".</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PUBLICACIONES -->
+            <div class="tab-content" id="publicaciones">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Producción Científica Destacada</h2>
+                
+                <h3 style="color: #667eea; margin-bottom: 20px;">Artículos Científicos</h3>
+                
+                <div class="publication-item">
+                    <div class="publication-title">Las regiones socioeconómicas administrativas del estado de Nayarit, México: una mirada al proceso de desarrollo urbano, periodo 1990-2020</div>
+                    <div class="publication-journal">FACES (2025) - Aceptado para publicación</div>
+                    <p>Análisis del desarrollo urbano en las regiones de Nayarit utilizando técnicas avanzadas de análisis territorial.</p>
+                </div>
+
+                <div class="publication-item">
+                    <div class="publication-title">Development of Digital Competencies and Higher Education in Mexico</div>
+                    <div class="publication-journal">Journal of Systems and Educational Management (2023)</div>
+                    <p>Investigación sobre el desarrollo de competencias digitales en educación superior mexicana.</p>
+                </div>
+
+                <div class="publication-item">
+                    <div class="publication-title">Proceso de urbanización y desarrollo económico de los municipios del estado de Nayarit, México, 1990-2010</div>
+                    <div class="publication-journal">Quivera Revista de Estudios Territoriales (2017)</div>
+                    <p>Análisis longitudinal del proceso de urbanización y su impacto en el desarrollo económico regional.</p>
+                </div>
+
+                <h3 style="color: #667eea; margin-top: 40px; margin-bottom: 20px;">Capítulos de Libro</h3>
+                
+                <div class="publication-item">
+                    <div class="publication-title">Afectaciones de la IAGen en los procesos cognitivos de los estudiantes</div>
+                    <div class="publication-journal">Editorial UAN (2025) - Aceptado para publicación</div>
+                    <p>Análisis del impacto de la inteligencia artificial generativa en procesos cognitivos estudiantiles.</p>
+                </div>
+
+                <div class="publication-item">
+                    <div class="publication-title">Tomatlán, Jalisco: su espacio, su importancia, su destino</div>
+                    <div class="publication-journal">Universidad de Guadalajara (2024)</div>
+                    <p>Estudio territorial y análisis del desarrollo regional de Tomatlán, Jalisco.</p>
+                </div>
+
+                <h3 style="color: #667eea; margin-top: 40px; margin-bottom: 20px;">Propiedad Intelectual</h3>
+                
+                <div class="publication-item">
+                    <div class="publication-title">Aparato para rehabilitación del síndrome del túnel carpiano</div>
+                    <div class="publication-journal">Patente MX - Número de solicitud: 2020007713</div>
+                    <p>Dispositivo ergonómico diseñado para asistir en la rehabilitación del síndrome del túnel carpiano, con enfoque en uso doméstico y accesibilidad.</p>
+                </div>
+            </div>
+
+            <!-- INTERESES -->
+            <div class="tab-content" id="intereses">
+                <h2 style="color: #667eea; margin-bottom: 30px;">Intereses y Pasiones</h2>
+                
+                <div class="hobbies-grid">
+                    <div class="hobby-card">
+                        <div class="hobby-icon">🌱</div>
+                        <h4>Sustentabilidad</h4>
+                        <p>Cultivo de árboles frutales y plantas aromáticas y medicinales. Promoción de un enfoque de respeto al entorno.</p>
+                    </div>
+                    
+                    <div class="hobby-card">
+                        <div class="hobby-icon">🔬</div>
+                        <h4>Innovación Social</h4>
+                        <p>Desarrollo de soluciones tecnológicas que impacten positivamente en la calidad de vida de las comunidades.</p>
+                    </div>
+                    
+                    <div class="hobby-card">
+                        <div class="hobby-icon">🌍</div>
+                        <h4>Desarrollo Regional</h4>
+                        <p>Análisis y promoción del crecimiento económico sostenible en comunidades locales.</p>
+                    </div>
+                    
+                    <div class="hobby-card">
+                        <div class="hobby-icon">🤖</div>
+                        <h4>IA Responsable</h4>
+                        <p>Investigación en inteligencia artificial ética y explicable para beneficio social.</p>
+                    </div>
+                    
+                    <div class="hobby-card">
+                        <div class="hobby-icon">🎓</div>
+                        <h4>Educación</h4>
+                        <p>Formación de nuevas generaciones con enfoque interdisciplinario y compromiso social.</p>
+                    </div>
+                    
+                    <div class="hobby-card">
+                        <div class="hobby-icon">💡</div>
+                        <h4>Tecnología Aplicada</h4>
+                        <p>Integración de tecnología y sustentabilidad para resolver problemas reales.</p>
+                    </div>
+                </div>
+
+                <div style="margin-top: 40px;">
+                    <h3 style="color: #667eea; margin-bottom: 20px;">Filosofía Personal</h3>
+                    <div class="info-card">
+                        <p style="line-height: 1.8; font-style: italic;">
+                            "Mi compromiso está orientado a generar conocimiento aplicado que contribuya a soluciones innovadoras, desde una perspectiva ética, técnica y de impacto local. Creo firmemente en la integración de tecnología, sostenibilidad y bienestar social como clave para desarrollar soluciones que realmente transformen las comunidades."
+                        </p>
+                    </div>
+                </div>
+
+                <div style="margin-top: 30px;">
+                    <h3 style="color: #667eea; margin-bottom: 20px;">Visión de Futuro</h3>
+                    <div class="info-card">
+                        <p style="line-height: 1.8;">
+                            Continuar desarrollando investigación aplicada que vincule la tecnología con las necesidades sociales, formando estudiantes con visión interdisciplinaria y promoviendo la innovación responsable que beneficie a las comunidades más vulnerables.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tabName) {
+            // Ocultar todas las pestañas
+            const allTabs = document.querySelectorAll('.tab-content');
+            allTabs.forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Remover clase activa de todos los botones
+            const allButtons = document.querySelectorAll('.tab-button');
+            allButtons.forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Mostrar la pestaña seleccionada
+            document.getElementById(tabName).classList.add('active');
+
+            // Activar el botón correspondiente
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>
