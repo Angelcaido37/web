@@ -64,7 +64,7 @@
 
     if (selectedFile) {
       try {
-        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/codigos/${encodeURIComponent(selectedFile)}`;
+        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/Codigos/${encodeURIComponent(selectedFile)}`;
         console.log("Cargando desde:", url); // debug
         const response = await fetch(url);
         if (!response.ok) throw new Error("No se pudo cargar el archivo.");
