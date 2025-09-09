@@ -56,14 +56,14 @@
   const branch = "Codigos";
 
   // ✅ Cargar código desde GitHub (carpeta Codigos con C mayúscula)
-  async function loadCodeFromFile() {
+async function loadCodeFromFile() {
   const selectedFile = document.getElementById("file-selector").value;
   const codeInput = document.getElementById("code-input");
 
   if (selectedFile) {
     try {
-      const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}${encodeURIComponent(selectedFile)}`;
-      console.log("Cargando desde:", url); // 👈 Mira esta URL en la consola
+      const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/Codigos/${encodeURIComponent(selectedFile)}`;
+      console.log("Cargando desde:", url); 
       const response = await fetch(url);
       if (!response.ok) throw new Error("No se pudo cargar el archivo.");
       const text = await response.text();
@@ -75,6 +75,7 @@
     }
   }
 }
+
 
   // ✅ Analizar código (modo offline / mock)
   function analyzeCode() {
@@ -101,5 +102,6 @@
 
 </body>
 </html>
+
 
 
