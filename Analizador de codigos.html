@@ -53,7 +53,7 @@
   // 📌 Configuración del repo
   const repoUser = "Angelcaido37";
   const repoName = "Mineria_Datos";
-  const branch = "main";
+  const branch = "Codigos";
 
   // ✅ Cargar código desde GitHub (carpeta Codigos con C mayúscula)
   async function loadCodeFromFile() {
@@ -62,7 +62,7 @@
 
   if (selectedFile) {
     try {
-      const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/Codigos/${encodeURIComponent(selectedFile)}`;
+      const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}${encodeURIComponent(selectedFile)}`;
       console.log("Cargando desde:", url); // 👈 Mira esta URL en la consola
       const response = await fetch(url);
       if (!response.ok) throw new Error("No se pudo cargar el archivo.");
@@ -101,4 +101,5 @@
 
 </body>
 </html>
+
 
