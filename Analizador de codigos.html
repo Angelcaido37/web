@@ -15,7 +15,7 @@
   <select id="file-selector" class="p-2 border rounded mb-4" onchange="loadCodeFromFile()">
     <option value="">-- Elige un archivo --</option>
 
-    <!-- Archivos originales -->
+    <!-- Archivos de tu repo Mineria_Datos/Codigos -->
     <option value="1. Tratamiento_Val_Falt.py">1. Tratamiento_Val_Falt.py</option>
     <option value="2. Detección y Tratamiento de Outliers.py">2. Detección y Tratamiento de Outliers.py</option>
     <option value="2a. Detección de outliers auto auto.py">2a. Detección de outliers auto auto.py</option>
@@ -26,15 +26,13 @@
     <option value="3a. Detectar var. para trans.py">3a. Detectar var. para trans.py</option>
     <option value="3b. transforma auto.py">3b. transforma auto.py</option>
     <option value="3c. transformaciones_avanzadas_power.py">3c. transformaciones_avanzadas_power.py</option>
-
-    <!-- ✅ Nuevos programas subidos -->
-    <option value="Val_falt.py">Val_falt.py</option>
-    <option value="Val_falt_data.py">Val_falt_data.py</option>
-    <option value="Val_falt_Eliminar.py">Val_falt_Eliminar.py</option>
-    <option value="Val_falt_Eliminar_Coherente.py">Val_falt_Eliminar_Coherente.py</option>
     <option value="3d. pipeline_preprocesamiento_auto.py">3d. pipeline_preprocesamiento_auto.py</option>
     <option value="3e. eda_visual_y_correlacion.py">3e. eda_visual_y_correlacion.py</option>
     <option value="4a. reportes_automatizados.py">4a. reportes_automatizados.py</option>
+    <option value="Val_falt.py">Val_falt.py</option>
+    <option value="Val_falt_Eliminar.py">Val_falt_Eliminar.py</option>
+    <option value="Val_falt_Eliminar_Coherente.py">Val_falt_Eliminar_Coherente.py</option>
+    <option value="Val_falt_data.py">Val_falt_data.py</option>
   </select>
 
   <!-- Área donde aparece el código -->
@@ -54,10 +52,10 @@
 <script>
   // 📌 Configuración del repo
   const repoUser = "Angelcaido37";
-  const repoName = "Mineria_Datos";   // 👈 tu nuevo repo
+  const repoName = "Mineria_Datos";
   const branch = "main";
 
-  // ✅ Cargar código desde GitHub (carpeta codigos)
+  // ✅ Cargar código desde GitHub (carpeta Codigos con C mayúscula)
   async function loadCodeFromFile() {
     const selectedFile = document.getElementById("file-selector").value;
     const codeInput = document.getElementById("code-input");
@@ -72,7 +70,7 @@
         codeInput.value = text;
       } catch (error) {
         console.error("Error al cargar el archivo:", error);
-        alert("No se pudo cargar el archivo. Verifica que exista en la carpeta codigos del repo Mineria_Datos.");
+        alert("No se pudo cargar el archivo. Verifica que exista en la carpeta Codigos del repo Mineria_Datos.");
         codeInput.value = "";
       }
     }
