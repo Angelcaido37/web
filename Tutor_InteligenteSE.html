@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Asistente de Código Python</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-6">
+
+  <h1 class="text-2xl font-bold mb-4">Tutor Inteligente de Códigos de Python</h1>
+  <h2 class="text-lg mb-6">By: Dr. Oscar Gabriel Vizcaíno Monroy</h2>
+
+  <!-- Switch Offline / IA -->
+  <div class="flex items-center mb-4">
+    <input type="checkbox" id="mode-toggle" class="w-5 h-5 text-blue-600">
+    <label for="mode-toggle" class="ml-2 font-medium text-gray-700">Modo IA (Gemini)</label>
+  </div>
+
+  <!-- Selector de archivos -->
+  <label class="block mb-2">Selecciona un archivo:</label>
+  <select id="file-selector" class="p-2 border rounded mb-4" onchange="loadCodeFromFile()">
+    <option value="">-- Elige un archivo --</option>
+    <option value="1. Agente Reactivo Aspiradora.py">1. Agente Reactivo Aspiradora.py</option>
+    <option value="2. Recomendador tipo Netflix sin BD.py">2. Recomendador tipo Netflix sin BD.py</option>
+    <option value="3. Recomendador con Mongo.py">3. Recomendador con Mongo.py</option>
+    <option value="4. Recomendador con YouTube API.py">4. Recomendador con YouTube API.py</option>
+    <option value="5. Agente Basado en Objetivos.py">5. Agente Basado en Objetivos.py</option>
+    <option value="6. Agente Basado en Utilidad.py">6. Agente Basado en Utilidad.py</option>
+    <option value="7. Agente que Aprende.py">7. Agente que Aprende.py</option>
+    <option value="8. Simulación de Entornos.py">8. Simulación de Entornos.py</option>
+    <option value="9. Embeddings y Similaridad con Ollama.py">9. Embeddings y Similaridad con Ollama.py</option>
+    <option value="10. maps.py">10. maps.py</option>
+    <option value="10a. mapa dinamico.py">10a. mapa dinamico.py</option>
+    <option value="11. Agente Multi-Agente Cooperativo.py">11. Agente Multi-Agente Cooperativo.py</option>
+    <option value="12. Agente Planificador BFS.py">12. Agente Planificador BFS.py</option>
+    <option value="13. Mini RAG.py">13. Mini RAG.py</option>
+    <option value="13_debug.py">13_debug.py</option>
+    <option value="14. Mini RAG con cache.py">14. Mini RAG con cache.py</option>
+  </select>
+
+  <!-- Área donde aparece el código -->
+  <textarea id="code-input" class="w-full h-64 p-3 border rounded mb-4 font-mono text-sm" placeholder="Aquí aparecerá tu código..."></textarea>
+
+  <!-- Botón analizar -->
+  <button onclick="analyzeCode()" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">Analizar Código</button>
+
+  <!-- Área de explicación -->
+  <div class="mt-6 p-4 bg-white border rounded shadow">
+    <h2 class="text-xl font-semibold mb-2">Explicación del código</h2>
+    <div id="explanation-output" class="text-sm text-gray-700">
+      <p class="text-gray-400">Las explicaciones aparecerán aquí...</p>
+    </div>
+  </div>
+
+  <!-- Autoevaluación -->
+  <div id="quiz-section" class="mt-8 hidden">
+    <div class="p-4 bg-white border rounded shadow">
+      <h2 class="text-xl font-semibold mb-4">Autoevaluación</h2>
+      <div id="quiz-questions"></div>
+      <button onclick="submitQuiz()" class="mt-4 w-full bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700">
+        Verificar Respuestas
+      </button>
+      <div id="quiz-results" class="mt-4 p-4 rounded-md text-sm font-semibold"></div>
+    </div>
+  </div>
+
+<script>
+  const repoUser = "Angelcaido37";
+  const repoName = "Desarrollo_SE"; // 
+  const branch = "main";
+
+  // API de Gemini
+  const apiKey = "AIzaSyB97aE9UtjA3qiKf1dswDfIlf5wG7nK-Sg"; 
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  let quizQuestions = [];
+
+  // Cargar código desde GitHub
+  async function loadCodeFromFile() {
+    const selectedFile = document.getElementById("file-selector").value;
+    const codeInput = document.getElementById("code-input");
+    if (selectedFile) {
+      try {
+        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/${encodeURIComponent(selectedFile)}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("No se pudo cargar el archivo.");
+        const text = await response.text();
+        codeInput.value = text;
+      } catch (error) {
+        alert("No se pudo cargar el archivo.");
+        codeInput.value = "";
+      }
+    }
+  }
+
+  // Analizar código según modo seleccionado
+  async function analyzeCode() {
+    const code = document.getElementById("code-input").value;
+    const explanationOutput = document.getElementById("explanation-output");
+    const useAI = document.getElementById("mode-toggle").checked;
+
+    if (!code) {
+      alert("Primero selecciona o pega un código.");
+      return;
+    }
+
+    explanationOutput.innerHTML = '<p class="text-center text-gray-400">Analizando el código...</p>';
+    document.getElementById("quiz-section").classList.add("hidden");
+    document.getElementById("quiz-results").innerHTML = "";
+
+    if (useAI) {
+      // Modo IA con Gemini
+      try {
+        const prompt = `
+        Eres un tutor de programación experto. Explica este código Python línea por línea y genera 3 preguntas de autoevaluación en formato JSON.
+        Formato: { "explanation": "...", "quiz": [ {"question":"...","options":["a","b","c","d"],"correct_answer":"b"} ] }
+        CÓDIGO: ${code}
+        `;
+        const payload = { contents: [{ parts: [{ text: prompt }] }] };
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error("Error en la API");
+        const result = await response.json();
+        let jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (jsonText) {
+          jsonText = jsonText.replace(/```json|```/g, "").trim();
+          const parsedResult = JSON.parse(jsonText);
+          explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
+          quizQuestions = parsedResult.quiz;
+          displayQuiz();
+          document.getElementById("quiz-section").classList.remove("hidden");
+        }
+      } catch (error) {
+        explanationOutput.innerHTML = `<p class="text-red-500">Hubo un error al analizar con IA.</p>`;
+      }
+    } else {
+      // Modo Offline (mock)
+      const mockResponse = {
+        explanation: `
+        def calculate_average(numbers): -> Define una función que recibe una lista de números.
+            total = sum(numbers) -> Calcula la suma de todos los elementos.
+            count = len(numbers) -> Cuenta el número de elementos.
+            return total / count -> Devuelve el promedio.
+        `,
+        quiz: [
+          { question: "¿Qué hace sum()?", options: ["a. Cuenta elementos", "b. Suma elementos", "c. Calcula promedio", "d. Convierte a string"], correct_answer: "b. Suma elementos" },
+          { question: "¿Qué pasa si la lista está vacía?", options: ["a. Devuelve 0", "b. Error ZeroDivisionError", "c. Se detiene", "d. Ninguna"], correct_answer: "b. Error ZeroDivisionError" },
+          { question: "¿Cuál es el propósito de la función?", options: ["a. Sumar", "b. Calcular promedio", "c. Ordenar", "d. Encontrar máximo"], correct_answer: "b. Calcular promedio" }
+        ]
+      };
+      explanationOutput.innerHTML = formatExplanation(mockResponse.explanation);
+      quizQuestions = mockResponse.quiz;
+      displayQuiz();
+      document.getElementById("quiz-section").classList.remove("hidden");
+    }
+  }
+
+  function formatExplanation(explanation) {
+    return explanation.split("\n").map(line => {
+      const parts = line.split("->");
+      if (parts.length > 1) {
+        return `<div class="mb-2">
+                  <span class="bg-gray-200 text-gray-800 rounded px-1 font-mono text-xs">${parts[0].trim()}</span>
+                  <span class="ml-2">${parts.slice(1).join("->").trim()}</span>
+                </div>`;
+      } else {
+        return `<p class="mb-1">${line}</p>`;
+      }
+    }).join("");
+  }
+
+  function displayQuiz() {
+    const quizContainer = document.getElementById("quiz-questions");
+    quizContainer.innerHTML = "";
+    quizQuestions.forEach((q, index) => {
+      quizContainer.innerHTML += `
+        <div class="mb-4 p-3 border rounded bg-gray-50">
+          <p class="font-medium mb-2">Pregunta ${index+1}: ${q.question}</p>
+          ${q.options.map(opt => `
+            <label class="block">
+              <input type="radio" name="q${index}" value="${opt}"> ${opt}
+            </label>
+          `).join("")}
+        </div>`;
+    });
+  }
+
+  function submitQuiz() {
+    let score = 0;
+    let feedback = "";
+    quizQuestions.forEach((q, index) => {
+      const selected = document.querySelector(`input[name="q${index}"]:checked`);
+      if (selected) {
+        if (selected.value === q.correct_answer) {
+          score++;
+          feedback += `<p class="text-green-600">Pregunta ${index+1}: ¡Correcto!</p>`;
+        } else {
+          feedback += `<p class="text-red-600">Pregunta ${index+1}: Incorrecto. Correcta: ${q.correct_answer}</p>`;
+        }
+      } else {
+        feedback += `<p class="text-yellow-600">Pregunta ${index+1}: Sin responder (correcta: ${q.correct_answer})</p>`;
+      }
+    });
+    document.getElementById("quiz-results").innerHTML = `
+      <p class="font-bold">Resultado: ${score} / ${quizQuestions.length}</p>
+      ${feedback}
+    `;
+  }
+</script>
+
+</body>
+</html>
