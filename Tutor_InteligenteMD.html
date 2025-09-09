@@ -153,9 +153,7 @@
         ]
       };
       explanationOutput.innerHTML = formatExplanation(mockResponse.explanation);
-      quizQuestions = mockResponse.quiz;
-      displayQuiz();
-      document.getElementById("quiz-section").classList.remove("hidden");
+      document.getElementById("quiz-section").classList.add("hidden");
     }
   }
 
@@ -214,6 +212,7 @@
 
 </body>
 </html>
+
 
 
 
