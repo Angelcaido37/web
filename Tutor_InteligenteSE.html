@@ -130,8 +130,7 @@
           const parsedResult = JSON.parse(jsonText);
           explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
           quizQuestions = parsedResult.quiz;
-          displayQuiz();
-          document.getElementById("quiz-section").classList.remove("hidden");
+          document.getElementById("quiz-section").classList.add("hidden");
         }
       } catch (error) {
         explanationOutput.innerHTML = `<p class="text-red-500">Hubo un error al analizar con IA.</p>`;
@@ -213,3 +212,4 @@
 
 </body>
 </html>
+
