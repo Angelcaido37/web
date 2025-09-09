@@ -15,7 +15,7 @@
   <select id="file-selector" class="p-2 border rounded mb-4" onchange="loadCodeFromFile()">
     <option value="">-- Elige un archivo --</option>
 
-    <!-- Archivos de tu repo Mineria_Datos/Codigos -->
+    <!-- Archivos en Mineria_Datos/main/Codigos -->
     <option value="1. Tratamiento_Val_Falt.py">1. Tratamiento_Val_Falt.py</option>
     <option value="2. Detección y Tratamiento de Outliers.py">2. Detección y Tratamiento de Outliers.py</option>
     <option value="2a. Detección de outliers auto auto.py">2a. Detección de outliers auto auto.py</option>
@@ -53,29 +53,28 @@
   // 📌 Configuración del repo
   const repoUser = "Angelcaido37";
   const repoName = "Mineria_Datos";
-  const branch = "Codigos";
+  const branch = "main";
 
-  // ✅ Cargar código desde GitHub (carpeta Codigos con C mayúscula)
-async function loadCodeFromFile() {
-  const selectedFile = document.getElementById("file-selector").value;
-  const codeInput = document.getElementById("code-input");
+  // ✅ Cargar código desde GitHub (carpeta Codigos en main)
+  async function loadCodeFromFile() {
+    const selectedFile = document.getElementById("file-selector").value;
+    const codeInput = document.getElementById("code-input");
 
-  if (selectedFile) {
-    try {
-      const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/Codigos/${encodeURIComponent(selectedFile)}`;
-      console.log("Cargando desde:", url); 
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("No se pudo cargar el archivo.");
-      const text = await response.text();
-      codeInput.value = text;
-    } catch (error) {
-      console.error("Error al cargar el archivo:", error);
-      alert("No se pudo cargar el archivo. Verifica que exista en la carpeta Codigos del repo Mineria_Datos.");
-      codeInput.value = "";
+    if (selectedFile) {
+      try {
+        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/Codigos/${encodeURIComponent(selectedFile)}`;
+        console.log("Cargando desde:", url);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("No se pudo cargar el archivo.");
+        const text = await response.text();
+        codeInput.value = text;
+      } catch (error) {
+        console.error("Error al cargar el archivo:", error);
+        alert("No se pudo cargar el archivo. Verifica que exista en la carpeta Codigos del repo Mineria_Datos.");
+        codeInput.value = "";
+      }
     }
   }
-}
-
 
   // ✅ Analizar código (modo offline / mock)
   function analyzeCode() {
@@ -102,6 +101,5 @@ async function loadCodeFromFile() {
 
 </body>
 </html>
-
 
 
