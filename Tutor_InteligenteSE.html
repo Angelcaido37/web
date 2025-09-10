@@ -71,7 +71,7 @@
   const branch = "main";
 
   // API de Gemini
-  const apiKey = "TU_API_KEY_AQUI"; 
+  const apiKey = "AIzaSyDyvJnmn7IzLjKupBC-ujBb_IRptvwsaIU"; 
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   let quizQuestions = [];
 
@@ -109,7 +109,7 @@
     document.getElementById("quiz-results").innerHTML = "";
 
     if (useAI) {
-      // ✅ Modo IA con Gemini (Explicación + Quiz)
+      // ✅ Modo IA con Gemini (Explicación + Quiz si JSON válido)
       try {
         const prompt = `
         Eres un tutor de programación experto. Explica este código Python línea por línea y genera 3 preguntas de autoevaluación en formato JSON.
@@ -125,19 +125,31 @@
         if (!response.ok) throw new Error("Error en la API");
         const result = await response.json();
         let jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
         if (jsonText) {
-          jsonText = jsonText.replace(/```json|```/g, "").trim();
-          const parsedResult = JSON.parse(jsonText);
-          explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
-          quizQuestions = parsedResult.quiz;
-          displayQuiz();
-          document.getElementById("quiz-section").classList.remove("hidden"); // 👈 mostrar quiz en IA
+          try {
+            jsonText = jsonText.replace(/```json|```/g, "").trim();
+            const parsedResult = JSON.parse(jsonText);
+
+            explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
+
+            quizQuestions = parsedResult.quiz || [];
+            if (quizQuestions.length > 0) {
+              displayQuiz();
+              document.getElementById("quiz-section").classList.remove("hidden");
+            }
+          } catch (parseError) {
+            explanationOutput.innerHTML = `<p class="text-red-500">La IA respondió, pero no en formato JSON válido.</p>
+                                           <pre class="text-xs bg-gray-100 p-2 rounded">${jsonText}</pre>`;
+          }
+        } else {
+          explanationOutput.innerHTML = `<p class="text-red-500">No se recibió respuesta válida de la IA.</p>`;
         }
       } catch (error) {
         explanationOutput.innerHTML = `<p class="text-red-500">Hubo un error al analizar con IA.</p>`;
       }
     } else {
-      // ✅ Modo Offline (mock) -> Solo explicación
+      // ✅ Modo Offline (mock) -> Solo explicación + aviso
       const mockResponse = {
         explanation: `
         def calculate_average(numbers): -> Define una función que recibe una lista de números.
@@ -146,8 +158,9 @@
             return total / count -> Devuelve el promedio.
         `
       };
-      explanationOutput.innerHTML = formatExplanation(mockResponse.explanation);
-      document.getElementById("quiz-section").classList.add("hidden"); // 👈 nunca mostrar quiz en mock
+      explanationOutput.innerHTML = formatExplanation(mockResponse.explanation) +
+        `<p class="text-gray-400 mt-2 italic">En modo offline no hay autoevaluación.</p>`;
+      document.getElementById("quiz-section").classList.add("hidden");
     }
   }
 
