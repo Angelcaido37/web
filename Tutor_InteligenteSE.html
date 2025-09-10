@@ -9,7 +9,7 @@
 <body class="bg-gray-100 p-6">
 
   <h1 class="text-2xl font-bold mb-4">Tutor Inteligente de Códigos de Python</h1>
-  <h2 class="text-2xl font-bold mb-4">By: Dr. Oscar Gabriel Vizcaino Monroy</h2>
+  <h2 class="text-2xl font-bold mb-4">By: Dr. Oscar Gabriel Vizcaíno Monroy</h2>
   <!-- Switch Offline / IA -->
   <div class="flex items-center mb-4">
     <input type="checkbox" id="mode-toggle" class="w-5 h-5 text-blue-600">
@@ -37,7 +37,6 @@
     <option value="13_debug.py">13_debug.py</option>
     <option value="14. Mini RAG con cache.py">14. Mini RAG con cache.py</option>
   </select>
-
 
   <!-- Área donde aparece el código -->
   <textarea id="code-input" class="w-full h-64 p-3 border rounded mb-4 font-mono text-sm" placeholder="Aquí aparecerá tu código..."></textarea>
@@ -81,7 +80,9 @@
     const codeInput = document.getElementById("code-input");
     if (selectedFile) {
       try {
-        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/${encodeURIComponent(selectedFile)}`;
+        // 🔹 corregido: encode para espacios y nombres raros
+        const safeFile = selectedFile.replace(/ /g, "%20");
+        const url = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/${safeFile}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error("No se pudo cargar el archivo.");
         const text = await response.text();
@@ -116,7 +117,10 @@
         Formato: { "explanation": "...", "quiz": [ {"question":"...","options":["a","b","c","d"],"correct_answer":"b"} ] }
         CÓDIGO: ${code}
         `;
-        const payload = { contents: [{ parts: [{ text: prompt }] }] };
+        const payload = { 
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" } // 🔹 Forzamos salida JSON
+        };
         const response = await fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -124,10 +128,13 @@
         });
         if (!response.ok) throw new Error("Error en la API");
         const result = await response.json();
-        let jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (jsonText) {
-          jsonText = jsonText.replace(/```json|```/g, "").trim();
-          const parsedResult = JSON.parse(jsonText);
+
+        // 🔹 Ahora ya debe venir JSON puro
+        const parsedResult = result.candidates?.[0]?.content?.parts?.[0]?.text 
+          ? JSON.parse(result.candidates[0].content.parts[0].text) 
+          : null;
+
+        if (parsedResult) {
           explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
           quizQuestions = parsedResult.quiz;
           displayQuiz();
@@ -206,5 +213,3 @@
 
 </body>
 </html>
-
-
