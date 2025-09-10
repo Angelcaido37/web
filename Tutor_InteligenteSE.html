@@ -67,11 +67,11 @@
 
 <script>
   const repoUser = "Angelcaido37";
-  const repoName = "Desarrollo_SE"; // 
+  const repoName = "Desarrollo_SE";
   const branch = "main";
 
   // API de Gemini
-  const apiKey = "AIzaSyB97aE9UtjA3qiKf1dswDfIlf5wG7nK-Sg"; 
+  const apiKey = "TU_API_KEY_AQUI"; 
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   let quizQuestions = [];
 
@@ -109,7 +109,7 @@
     document.getElementById("quiz-results").innerHTML = "";
 
     if (useAI) {
-      // Modo IA con Gemini
+      // ✅ Modo IA con Gemini (Explicación + Quiz)
       try {
         const prompt = `
         Eres un tutor de programación experto. Explica este código Python línea por línea y genera 3 preguntas de autoevaluación en formato JSON.
@@ -130,30 +130,24 @@
           const parsedResult = JSON.parse(jsonText);
           explanationOutput.innerHTML = formatExplanation(parsedResult.explanation);
           quizQuestions = parsedResult.quiz;
-          document.getElementById("quiz-section").classList.add("hidden");
+          displayQuiz();
+          document.getElementById("quiz-section").classList.remove("hidden"); // 👈 mostrar quiz en IA
         }
       } catch (error) {
         explanationOutput.innerHTML = `<p class="text-red-500">Hubo un error al analizar con IA.</p>`;
       }
     } else {
-      // Modo Offline (mock)
+      // ✅ Modo Offline (mock) -> Solo explicación
       const mockResponse = {
         explanation: `
         def calculate_average(numbers): -> Define una función que recibe una lista de números.
             total = sum(numbers) -> Calcula la suma de todos los elementos.
             count = len(numbers) -> Cuenta el número de elementos.
             return total / count -> Devuelve el promedio.
-        `,
-        quiz: [
-          { question: "¿Qué hace sum()?", options: ["a. Cuenta elementos", "b. Suma elementos", "c. Calcula promedio", "d. Convierte a string"], correct_answer: "b. Suma elementos" },
-          { question: "¿Qué pasa si la lista está vacía?", options: ["a. Devuelve 0", "b. Error ZeroDivisionError", "c. Se detiene", "d. Ninguna"], correct_answer: "b. Error ZeroDivisionError" },
-          { question: "¿Cuál es el propósito de la función?", options: ["a. Sumar", "b. Calcular promedio", "c. Ordenar", "d. Encontrar máximo"], correct_answer: "b. Calcular promedio" }
-        ]
+        `
       };
       explanationOutput.innerHTML = formatExplanation(mockResponse.explanation);
-      quizQuestions = mockResponse.quiz;
-      displayQuiz();
-      document.getElementById("quiz-section").classList.remove("hidden");
+      document.getElementById("quiz-section").classList.add("hidden"); // 👈 nunca mostrar quiz en mock
     }
   }
 
@@ -212,4 +206,3 @@
 
 </body>
 </html>
-
