@@ -12,7 +12,6 @@
   <h2 class="text-2xl font-bold mb-4">By: Dr. Oscar Gabriel Vizcaino Monroy</h2>
   <!-- Switch Offline / IA -->
   <div class="flex items-center mb-4">
-
     <input type="checkbox" id="mode-toggle" class="w-5 h-5 text-blue-600">
     <label for="mode-toggle" class="ml-2 font-medium text-gray-700">Modo IA (Gemini)</label>
   </div>
@@ -72,7 +71,7 @@
   const branch = "main";
 
   // API de Gemini
-  const apiKey = "AIzaSyB97aE9UtjA3qiKf1dswDfIlf5wG7nK-Sg"; 
+  const apiKey = "TU_API_KEY_AQUI"; 
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   let quizQuestions = [];
 
@@ -138,22 +137,17 @@
         explanationOutput.innerHTML = `<p class="text-red-500">Hubo un error al analizar con IA.</p>`;
       }
     } else {
-      // 🔹 Modo Offline (mock)
+      // 🔹 Modo Offline (mock) -> SOLO explicación
       const mockResponse = {
         explanation: `
         def calculate_average(numbers): -> Define una función que recibe una lista de números.
             total = sum(numbers) -> Calcula la suma de todos los elementos.
             count = len(numbers) -> Cuenta el número de elementos.
             return total / count -> Devuelve el promedio.
-        `,
-        quiz: [
-          { question: "¿Qué hace sum()?", options: ["a. Cuenta elementos", "b. Suma elementos", "c. Calcula promedio", "d. Convierte a string"], correct_answer: "b. Suma elementos" },
-          { question: "¿Qué pasa si la lista está vacía?", options: ["a. Devuelve 0", "b. Error ZeroDivisionError", "c. Se detiene", "d. Ninguna"], correct_answer: "b. Error ZeroDivisionError" },
-          { question: "¿Cuál es el propósito de la función?", options: ["a. Sumar", "b. Calcular promedio", "c. Ordenar", "d. Encontrar máximo"], correct_answer: "b. Calcular promedio" }
-        ]
+        `
       };
       explanationOutput.innerHTML = formatExplanation(mockResponse.explanation);
-      document.getElementById("quiz-section").classList.add("hidden");
+      document.getElementById("quiz-section").classList.add("hidden"); // 👈 siempre oculto en mock
     }
   }
 
@@ -212,7 +206,3 @@
 
 </body>
 </html>
-
-
-
-
