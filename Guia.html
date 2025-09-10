@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guía del Analista de Datos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+        }
+        .container {
+            max-width: 900px;
+            margin: auto;
+        }
+        .message {
+            background-color: #fff;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+        .message.bot {
+            background-color: #d1e8ff;
+            align-self: flex-start;
+            border-bottom-left-radius: 0;
+        }
+        .message.user {
+            background-color: #3b82f6;
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 0;
+        }
+        .chat-area {
+            height: calc(100vh - 150px);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1rem;
+            scroll-behavior: smooth;
+        }
+        .input-area {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #fff;
+            padding: 1rem;
+            box-shadow: 0 -4px 6px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col h-screen">
+
+    <header class="bg-blue-600 text-white p-4 shadow-md">
+        <h1 class="text-2xl font-bold text-center">Guía del Analista de Datos</h1>
+    </header>
+
+    <main class="flex-grow flex flex-col p-4 overflow-hidden">
+        <div id="chat-area" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- Initial bot message -->
+            <div class="flex items-start gap-4">
+                <div class="flex-1 bg-white p-4 rounded-lg rounded-bl-none shadow-md">
+                    ¡Hola! Soy tu asistente para el ejercicio de análisis de datos. Para empezar, tu primera tarea es unificar los dos datasets. Puedes preguntar: "¿Cómo uno los dos dataframes?" o "Necesito convertir la temperatura de Fahrenheit a Celsius".
+                </div>
+            </div>
+        </div>
+
+        <!-- User input -->
+        <div class="bg-white p-4 border-t border-gray-200">
+            <div class="flex items-center gap-4">
+                <input type="text" id="user-input" placeholder="Escribe tu pregunta aquí..." class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                <button id="send-btn" class="bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors">
+                    Enviar
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        // Gemini API configuration
+        const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=';
+        // IMPORTANTE: DEBES REEMPLAZAR EL VALOR ABAJO CON TU CLAVE DE API PERSONAL.
+        // Si no tienes una, puedes obtenerla en Google AI Studio.
+        // ADVERTENCIA: No compartas esta clave públicamente en un repositorio de GitHub,
+        // ya que cualquiera podría usarla.
+        const API_KEY = "TU_CLAVE_DE_API_AQUI"; 
+
+        // Initialize chat history and elements
+        const chatHistory = [];
+        const chatArea = document.getElementById('chat-area');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        // Function to create and append a message element
+        function addMessage(text, isUser = false) {
+            const messageWrapper = document.createElement('div');
+            messageWrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`;
+            const messageBubble = document.createElement('div');
+            messageBubble.className = `max-w-xl p-4 rounded-xl shadow-md ${isUser ? 'bg-blue-500 text-white rounded-br-none' : 'bg-white rounded-bl-none'}`;
+            messageBubble.innerText = text;
+            messageWrapper.appendChild(messageBubble);
+            chatArea.appendChild(messageWrapper);
+            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to the bottom
+        }
+
+        // Function to send a message and get a response from the API
+        async function sendMessage() {
+            const userText = userInput.value.trim();
+            if (!userText) return;
+
+            // Display user message
+            addMessage(userText, true);
+            userInput.value = '';
+
+            // Add user message to chat history
+            chatHistory.push({ role: "user", parts: [{ text: userText }] });
+
+            // Display a loading message
+            const loadingMessage = addMessage("Asistente escribiendo...", false);
+
+            try {
+                // System instructions to define the model's persona and role
+                const systemPrompt = "Eres un tutor experto en ciencia de datos, amable y conversacional. Tu objetivo es ayudar a los estudiantes a resolver un ejercicio práctico sobre preparación y análisis exploratorio de datos, incluyendo la integración de datos de múltiples fuentes. NO des la solución completa directamente. En su lugar, proporciona pistas, la sintaxis correcta para las librerías de Python como pandas, numpy y scikit-learn, y explica el porqué de cada paso. Mantén la interacción como un chat amigable. El ejercicio trata sobre la limpieza y análisis de un dataset de calidad del aire. Los temas del material didáctico del estudiante son: integración de datos (fusión, renombramiento, conversión), tratamiento de valores faltantes, detección y tratamiento de outliers, transformación de variables (codificación, escalado) y visualización y análisis (univariado, bivariado, multivariado).";
+
+                // Payload for the API call
+                const payload = {
+                    contents: chatHistory,
+                    systemInstruction: {
+                        parts: [{ text: systemPrompt }]
+                    },
+                };
+
+                // Aseguramos que la URL incluya la clave de la API.
+                const fullApiUrl = API_URL + API_KEY;
+                const response = await fetch(fullApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    console.error('API response error:', response.statusText);
+                    const errorResponse = await response.json();
+                    console.error('API error details:', errorResponse);
+                    throw new Error(`Error en la respuesta del servidor: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const aiResponse = result.candidates?.[0]?.content?.parts?.[0]?.text || "No pude generar una respuesta. ¿Puedes intentar de nuevo?";
+
+                // Remove loading message
+                chatArea.removeChild(chatArea.lastChild);
+
+                // Display AI response
+                addMessage(aiResponse, false);
+                chatHistory.push({ role: "model", parts: [{ text: aiResponse }] });
+
+            } catch (error) {
+                console.error('Error fetching from API:', error);
+                chatArea.removeChild(chatArea.lastChild);
+                addMessage("Hubo un problema al conectar con el asistente. Inténtalo de nuevo más tarde.", false);
+            }
+        }
+
+        // Event listeners
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
