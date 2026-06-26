@@ -251,6 +251,25 @@ export default function App() {
 
   // --- PARTICIPANT FLOW ---
   const initParticipant = () => {
+    // Cada nueva evaluación debe iniciar completamente limpia.
+    // Sin este reinicio, el Postest heredaba del Pretest estados como
+    // memoria finalizada, letras terminadas, fluidez bloqueada y el folio anterior.
+    setSaveError('');
+    setSaveSuccess('');
+    setGuardando(false);
+
+    setInteractive({
+      memoriaPaso: 0,
+      letraActual: '',
+      letrasActivas: false,
+      letrasTerminadas: false,
+      fluidezActiva: false,
+      fluidezTerminada: false,
+      tiempoFluidez: 60,
+      faltantesCat: [],
+      faltantesOpc: []
+    });
+
     setFormData({
       nombre: '', edad: '', educacion: '', fase: faseSelect, grupo: 'Experimental', version: cfg.version,
       alternancia: [], visuo1Img: null, relojImg: null, animal1: '', animal2: '', animal3: '',
@@ -362,6 +381,8 @@ export default function App() {
   };
 
   const submitTest = async () => {
+    if (guardando) return;
+
     setSaveError('');
     setSaveSuccess('');
 
@@ -980,7 +1001,6 @@ export default function App() {
                 </div>
                 {authError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{authError}</div>}
                 {saveError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{saveError}</div>}
-                {saveSuccess && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-green-200 bg-green-50 text-green-700 text-sm font-medium">{saveSuccess}</div>}
                 <button
                   onClick={submitTest}
                   disabled={guardando || !authReady || !user}
@@ -995,8 +1015,13 @@ export default function App() {
               <div className="text-center py-16">
                 <div className={`w-24 h-24 text-white rounded-full flex items-center justify-center text-5xl mx-auto mb-6 ${themeColor}`}>✓</div>
                 <h2 className="text-3xl font-black text-slate-800 mb-4">Evaluación {faseSelect} Completada</h2>
-                <p className="text-slate-500 mb-8 font-medium">Sus respuestas han sido registradas para el proyecto PANEG.</p>
-                <button onClick={()=>{setAppState('home'); setStep(0);}} className="px-8 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors">Volver al Inicio</button>
+                <p className="text-slate-500 mb-4 font-medium">Sus respuestas han sido registradas para el proyecto PANEG.</p>
+                {saveSuccess && (
+                  <div className="max-w-md mx-auto mb-8 p-4 rounded-xl border border-green-200 bg-green-50 text-green-700 text-sm font-medium break-words">
+                    {saveSuccess}
+                  </div>
+                )}
+                <button onClick={()=>{setAppState('home'); setStep(0); setSaveSuccess(''); setSaveError('');}} className="px-8 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors">Volver al Inicio</button>
               </div>
             )}
           </div>
