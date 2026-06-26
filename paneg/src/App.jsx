@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 // --- CONFIGURACIÓN FIREBASE PROPIA (paneg-bd) ---
 const firebaseConfig = {
@@ -78,29 +78,44 @@ const limpiarParaFirestore = (valor) => {
   return valor;
 };
 
+const tokenizarFluidez = (texto = "") =>
+  (texto.toLowerCase().match(/[a-záéíóúüñ]+/gi) || []).map(p => p.trim()).filter(Boolean);
+
+const unicosPorFormaNormalizada = (palabras = []) => {
+  const vistos = new Set();
+  return palabras.filter((palabra) => {
+    const clave = normalizar(palabra);
+    if (vistos.has(clave)) return false;
+    vistos.add(clave);
+    return true;
+  });
+};
+
 const analizarFluidez = (texto = "", letraObjetivo = "F") => {
   const letra = normalizar(letraObjetivo);
-  const ingresadas = normalizar(texto)
-    .split(/[\s,;:.!?¿¡()"'\n\r-]+/)
-    .map((palabra) => palabra.trim())
-    .filter(Boolean);
+  const ingresadas = tokenizarFluidez(texto);
+  const conLetraCorrecta = ingresadas.filter((palabra) => normalizar(palabra).startsWith(letra));
+  const validas = unicosPorFormaNormalizada(conLetraCorrecta);
+  const clavesVistas = new Set();
+  const repetidas = unicosPorFormaNormalizada(conLetraCorrecta.filter((palabra) => {
+    const clave = normalizar(palabra);
+    if (clavesVistas.has(clave)) return true;
+    clavesVistas.add(clave);
+    return false;
+  }));
+  const letraIncorrecta = unicosPorFormaNormalizada(
+    ingresadas.filter((palabra) => !normalizar(palabra).startsWith(letra))
+  );
 
-  const conLetraCorrecta = ingresadas.filter((palabra) => palabra.startsWith(letra));
-  const validas = [...new Set(conLetraCorrecta)];
-  const repetidas = [...new Set(
-    conLetraCorrecta.filter((palabra, indice, arreglo) => arreglo.indexOf(palabra) !== indice)
-  )];
-  const letraIncorrecta = [...new Set(
-    ingresadas.filter((palabra) => !palabra.startsWith(letra))
-  )];
+  return { ingresadas, validas, repetidas, letraIncorrecta, cantidadValidas: validas.length };
+};
 
-  return {
-    ingresadas,
-    validas,
-    repetidas,
-    letraIncorrecta,
-    cantidadValidas: validas.length
-  };
+const existeEnDiccionarioEspanol = async (palabra) => {
+  if (!palabra || palabra.length < 2) return false;
+  const respuesta = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/es/${encodeURIComponent(palabra)}`);
+  if (respuesta.ok) return true;
+  if (respuesta.status === 404) return false;
+  throw new Error(`Servicio de diccionario no disponible (${respuesta.status})`);
 };
 
 // --- CANVAS COMPONENT ---
@@ -180,7 +195,7 @@ export default function App() {
   const [faseSelect, setFaseSelect] = useState('Pretest');
   const [step, setStep] = useState(0);
   const [formData, setFormData] = useState({});
-  const [interactive, setInteractive] = useState({ memoriaPaso: 0, letraActual: '', letrasActivas: false, letrasTerminadas: false, fluidezActiva: false, fluidezTerminada: false, tiempoFluidez: 60, faltantesCat: [], faltantesOpc: [] });
+  const [interactive, setInteractive] = useState({ memoriaPaso: 0, letraActual: '', letrasActivas: false, letrasTerminadas: false, fluidezActiva: false, fluidezTerminada: false, tiempoFluidez: 60, fluidezValidando: false, fluidezDiccionario: { validas: [], invalidas: [], error: '' }, frasesEscuchadas: [false, false], fraseReproduciendo: null, faltantesCat: [], faltantesOpc: [] });
 
   // Evaluator State
   const [evalPass, setEvalPass] = useState('');
@@ -194,6 +209,7 @@ export default function App() {
   const [selectedRes, setSelectedRes] = useState(null);
   const [manualScores, setManualScores] = useState({ visuo1: 0, reloj: 0 });
   const [dashTab, setDashTab] = useState('list');
+  const [orientationError, setOrientationError] = useState('');
 
   const cfg = MOCA_CONFIG[faseSelect] || MOCA_CONFIG['Pretest'];
 
@@ -266,6 +282,10 @@ export default function App() {
       fluidezActiva: false,
       fluidezTerminada: false,
       tiempoFluidez: 60,
+      fluidezValidando: false,
+      fluidezDiccionario: { validas: [], invalidas: [], error: '' },
+      frasesEscuchadas: [false, false],
+      fraseReproduciendo: null,
       faltantesCat: [],
       faltantesOpc: []
     });
@@ -274,9 +294,10 @@ export default function App() {
       nombre: '', edad: '', educacion: '', fase: faseSelect, grupo: 'Experimental', version: cfg.version,
       alternancia: [], visuo1Img: null, relojImg: null, animal1: '', animal2: '', animal3: '',
       numerosAdelante: '', numerosAtras: '', letrasErrores: 0, letrasAciertos: 0, restas: ['', '', '', '', ''],
-      frase1: '', frase2: '', fluidez: '', similitud1: '', similitud2: '',
+      frase1: '', frase2: '', fluidez: '', fluidezValidadas: [], fluidezInvalidas: [], similitud1: '', similitud2: '',
       recuerdoEspontaneo: ['', '', '', '', ''], recuerdoCategoria: {}, recuerdoOpcion: {}, fecha: '', lugar: '', localidad: ''
     });
+    setOrientationError('');
     setStep(0);
     setAppState('participant_test');
   };
@@ -314,6 +335,45 @@ export default function App() {
     if (interactive.letraActual === 'A') setFormData(p => ({ ...p, letrasAciertos: p.letrasAciertos + 1 }));
     else if (interactive.letraActual !== '') setFormData(p => ({ ...p, letrasErrores: p.letrasErrores + 1 }));
   };
+
+  const escucharFrase = (indice) => {
+    if (!('speechSynthesis' in window) || interactive.frasesEscuchadas[indice] || interactive.fraseReproduciendo !== null) return;
+    const utterance = new SpeechSynthesisUtterance(cfg.frases[indice]);
+    utterance.lang = 'es-MX';
+    utterance.rate = 0.88;
+    utterance.pitch = 1;
+    utterance.onstart = () => setInteractive(prev => ({ ...prev, fraseReproduciendo: indice }));
+    utterance.onend = () => setInteractive(prev => {
+      const escuchadas = [...prev.frasesEscuchadas];
+      escuchadas[indice] = true;
+      return { ...prev, frasesEscuchadas: escuchadas, fraseReproduciendo: null };
+    });
+    utterance.onerror = () => setInteractive(prev => ({ ...prev, fraseReproduciendo: null }));
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const validarFluidezDiccionario = async () => {
+    const analisis = analizarFluidez(formData.fluidez, cfg.fluidezLetra);
+    setInteractive(prev => ({ ...prev, fluidezValidando: true, fluidezDiccionario: { validas: [], invalidas: [], error: '' } }));
+    try {
+      const resultadosDiccionario = await Promise.all(
+        analisis.validas.map(async palabra => ({ palabra, existe: await existeEnDiccionarioEspanol(palabra) }))
+      );
+      const validas = resultadosDiccionario.filter(r => r.existe).map(r => r.palabra);
+      const invalidas = resultadosDiccionario.filter(r => !r.existe).map(r => r.palabra);
+      setFormData(prev => ({ ...prev, fluidezValidadas: validas, fluidezInvalidas: invalidas }));
+      setInteractive(prev => ({ ...prev, fluidezValidando: false, fluidezDiccionario: { validas, invalidas, error: '' } }));
+    } catch (error) {
+      setInteractive(prev => ({ ...prev, fluidezValidando: false, fluidezDiccionario: { validas: [], invalidas: [], error: 'No fue posible consultar el diccionario. Revise la conexión y vuelva a intentar.' } }));
+    }
+  };
+
+  useEffect(() => {
+    if (interactive.fluidezTerminada && formData.fluidez && !interactive.fluidezValidando && interactive.fluidezDiccionario.validas.length === 0 && interactive.fluidezDiccionario.invalidas.length === 0 && !interactive.fluidezDiccionario.error) {
+      validarFluidezDiccionario();
+    }
+  }, [interactive.fluidezTerminada]);
 
   const evaluarMIS = (etapa) => {
     if (etapa === 'espontaneo') {
@@ -357,7 +417,8 @@ export default function App() {
     }
 
     const fluidezAnalizada = analizarFluidez(data.fluidez, config.fluidezLetra);
-    if (fluidezAnalizada.cantidadValidas >= 11) pts += 1;
+    const cantidadFluidezConfirmada = Array.isArray(data.fluidezValidadas) ? data.fluidezValidadas.length : 0;
+    if (cantidadFluidezConfirmada >= 11) pts += 1;
 
     const s1 = normalizar(data.similitud1), s2 = normalizar(data.similitud2);
     if (config.version === '8.1') {
@@ -396,6 +457,12 @@ export default function App() {
       return;
     }
 
+    if (!formData.fecha || !formData.lugar?.trim() || !formData.localidad?.trim()) {
+      setOrientationError('Complete la fecha, el lugar actual y la ciudad antes de guardar.');
+      return;
+    }
+    setOrientationError('');
+
     setGuardando(true);
 
     try {
@@ -412,10 +479,12 @@ export default function App() {
         fluidezAnalisis: {
           letraSolicitada: cfg.fluidezLetra,
           palabrasIngresadas: fluidezAnalizada.ingresadas,
-          palabrasValidas: fluidezAnalizada.validas,
+          palabrasCandidatasPorLetra: fluidezAnalizada.validas,
+          palabrasValidas: formData.fluidezValidadas || [],
+          palabrasNoReconocidas: formData.fluidezInvalidas || [],
           palabrasRepetidas: fluidezAnalizada.repetidas,
           palabrasConLetraIncorrecta: fluidezAnalizada.letraIncorrecta,
-          cantidadValidas: fluidezAnalizada.cantidadValidas
+          cantidadValidas: (formData.fluidezValidadas || []).length
         }
       });
 
@@ -468,6 +537,18 @@ export default function App() {
       });
       setSelectedRes(null);
     } catch (e) { console.error(e); }
+  };
+
+  const eliminarResultado = async (resultado) => {
+    const identificador = resultado?.nombre || resultado?.id || 'este registro';
+    if (!window.confirm(`¿Eliminar definitivamente el registro de ${identificador}? Esta acción no se puede deshacer.`)) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'data', 'moca_results', 'results', resultado.id));
+      if (selectedRes?.id === resultado.id) setSelectedRes(null);
+    } catch (error) {
+      console.error('Error al eliminar:', error);
+      window.alert(`No fue posible eliminar el registro: ${error.code || error.message}`);
+    }
   };
 
   const getTotalScore = (r, localManual = null) => {
@@ -568,7 +649,7 @@ export default function App() {
                       </td>
                       <td className="p-5 text-center font-black text-slate-700">{r.misAuto}/15</td>
                       <td className="p-5">{r.evaluado ? <span className="text-green-600 bg-green-50 px-2 py-1 rounded-md text-xs font-bold">✅ Evaluado</span> : <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded-md text-xs font-bold">⏳ Pendiente</span>}</td>
-                      <td className="p-5 text-right"><button onClick={() => {setSelectedRes(r); setManualScores({visuo1: r.puntosManualVisuo1||0, reloj: r.puntosManualReloj||0});}} className="text-purple-600 hover:text-purple-800 font-bold text-sm bg-purple-50 px-3 py-1.5 rounded-lg">Calificar</button></td>
+                      <td className="p-5 text-right"><div className="flex justify-end gap-2"><button onClick={() => {setSelectedRes(r); setManualScores({visuo1: r.puntosManualVisuo1||0, reloj: r.puntosManualReloj||0});}} className="text-purple-600 hover:text-purple-800 font-bold text-sm bg-purple-50 px-3 py-1.5 rounded-lg">Calificar</button><button onClick={() => eliminarResultado(r)} className="text-red-600 hover:text-red-800 font-bold text-sm bg-red-50 px-3 py-1.5 rounded-lg">Eliminar</button></div></td>
                     </tr>
                   ))}
                   {resultados.length === 0 && <tr><td colSpan="5" className="p-10 text-center text-slate-400">Sin datos registrados</td></tr>}
@@ -900,12 +981,25 @@ export default function App() {
               <div className="text-center">
                 <h2 className="text-2xl font-black mb-6">Repetición</h2>
                 <div className="space-y-6 text-left max-w-lg mx-auto mb-8">
-                  {[1,2].map(n => (
-                    <div key={n} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                      <p className="font-bold italic text-slate-700 mb-3">"{cfg.frases[n-1]}"</p>
-                      <input type="text" className="w-full p-3 border-2 border-white rounded-lg outline-none font-medium" value={formData[`frase${n}`]} onChange={e=>setFormData({...formData, [`frase${n}`]: e.target.value})} placeholder="Escriba exacto..." />
-                    </div>
-                  ))}
+                  {[1,2].map(n => {
+                    const indice = n - 1;
+                    const escuchada = interactive.frasesEscuchadas[indice];
+                    const reproduciendo = interactive.fraseReproduciendo === indice;
+                    return (
+                      <div key={n} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                        <p className="font-bold text-slate-700 mb-3">Frase {n}</p>
+                        <button
+                          type="button"
+                          onClick={() => escucharFrase(indice)}
+                          disabled={escuchada || interactive.fraseReproduciendo !== null}
+                          className={`w-full mb-4 px-4 py-3 rounded-xl font-black text-white disabled:opacity-50 ${themeColor}`}
+                        >
+                          {reproduciendo ? '🔊 Reproduciendo...' : escuchada ? '✓ Frase escuchada' : '🔊 Escuchar esta frase'}
+                        </button>
+                        <input type="text" disabled={!escuchada} className="w-full p-3 border-2 border-white rounded-lg outline-none font-medium disabled:bg-slate-100 disabled:text-slate-400" value={formData[`frase${n}`]} onChange={e=>setFormData({...formData, [`frase${n}`]: e.target.value})} placeholder={escuchada ? 'Escriba exactamente lo que escuchó...' : 'Primero escuche la frase'} />
+                      </div>
+                    );
+                  })}
                 </div>
                 <button onClick={()=>setStep(10)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
               </div>
@@ -923,15 +1017,19 @@ export default function App() {
                       const analisis = analizarFluidez(formData.fluidez, cfg.fluidezLetra);
                       return (
                         <div className="mt-4 text-left text-sm space-y-1">
-                          <p className="font-bold text-slate-700">Palabras válidas y diferentes: {analisis.cantidadValidas}</p>
+                          <p className="font-bold text-slate-700">Candidatas por letra y sin repetir: {analisis.cantidadValidas}</p>
                           {analisis.repetidas.length > 0 && <p className="text-orange-700">Repetidas: {analisis.repetidas.join(', ')}</p>}
                           {analisis.letraIncorrecta.length > 0 && <p className="text-red-700">No empiezan con {cfg.fluidezLetra}: {analisis.letraIncorrecta.join(', ')}</p>}
+                          {interactive.fluidezValidando && <p className="text-blue-700 font-bold">Consultando diccionario español...</p>}
+                          {!interactive.fluidezValidando && interactive.fluidezDiccionario.validas.length > 0 && <p className="text-green-700 font-bold">Reconocidas por el diccionario: {interactive.fluidezDiccionario.validas.length} ({interactive.fluidezDiccionario.validas.join(', ')})</p>}
+                          {!interactive.fluidezValidando && interactive.fluidezDiccionario.invalidas.length > 0 && <p className="text-red-700 font-bold">No reconocidas o mal escritas: {interactive.fluidezDiccionario.invalidas.join(', ')}</p>}
+                          {interactive.fluidezDiccionario.error && <div className="mt-2"><p className="text-red-700 font-bold">{interactive.fluidezDiccionario.error}</p><button type="button" onClick={validarFluidezDiccionario} className="mt-2 px-3 py-2 rounded-lg bg-blue-600 text-white font-bold">Reintentar validación</button></div>}
                         </div>
                       );
                     })()}
                   </div>
                 )}
-                {interactive.fluidezTerminada && <button onClick={()=>setStep(11)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>}
+                {interactive.fluidezTerminada && <button disabled={interactive.fluidezValidando || !!interactive.fluidezDiccionario.error} onClick={()=>setStep(11)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed">{interactive.fluidezValidando ? 'Validando palabras...' : 'Siguiente'}</button>}
               </div>
             )}
 
@@ -999,6 +1097,7 @@ export default function App() {
                   <input type="text" className="w-full p-4 bg-slate-50 border-2 rounded-xl font-bold text-slate-700 outline-none" placeholder="Lugar actual (Ej. Clínica)" value={formData.lugar} onChange={e=>setFormData({...formData, lugar: e.target.value})} />
                   <input type="text" className="w-full p-4 bg-slate-50 border-2 rounded-xl font-bold text-slate-700 outline-none" placeholder="Ciudad" value={formData.localidad} onChange={e=>setFormData({...formData, localidad: e.target.value})} />
                 </div>
+                {orientationError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 text-sm font-medium">{orientationError}</div>}
                 {authError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{authError}</div>}
                 {saveError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{saveError}</div>}
                 <button
