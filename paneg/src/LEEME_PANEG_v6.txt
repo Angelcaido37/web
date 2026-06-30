@@ -1,0 +1,77 @@
+PANEG–MoCA supervisado v1.0
+============================
+
+ARCHIVO PRINCIPAL
+- App_PANEG_supervisado_v6.jsx
+
+IMPORTANTE
+Esta versión es un prototipo técnico alineado con las guías 8.1 y 8.3. No puede presentarse como instrumento certificado o validado sin autorización del titular, capacitación de evaluadores y validación psicométrica de la adaptación digital.
+
+INSTALACIÓN
+1. Copie App_PANEG_supervisado_v6.jsx a:
+   C:\Proyectos de Investigación\web\paneg\src\App.jsx
+
+2. Ejecute:
+   cd "C:\Proyectos de Investigación\web\paneg"
+   npm run dev
+
+3. Cuando funcione:
+   npm run build
+
+4. Copie dist a docs\paneg y suba el repositorio.
+
+ESTÍMULOS VISUALES AUTORIZADOS
+Coloque las imágenes oficiales autorizadas en:
+
+public\stimuli\moca81\trail.png
+public\stimuli\moca81\cube.png
+public\stimuli\moca81\animal1.png
+public\stimuli\moca81\animal2.png
+public\stimuli\moca81\animal3.png
+
+public\stimuli\moca83\trail.png
+public\stimuli\moca83\bed.png
+public\stimuli\moca83\animal1.png
+public\stimuli\moca83\animal2.png
+public\stimuli\moca83\animal3.png
+
+AUDIOS PREGRABADOS RECOMENDADOS
+public\audio\moca81\digits-forward.mp3
+public\audio\moca81\digits-backward.mp3
+public\audio\moca81\sentence-1.mp3
+public\audio\moca81\sentence-2.mp3
+
+public\audio\moca83\digits-forward.mp3
+public\audio\moca83\digits-backward.mp3
+public\audio\moca83\sentence-1.mp3
+public\audio\moca83\sentence-2.mp3
+
+La memoria y vigilancia usan síntesis del navegador en esta versión. Para una versión final, también deben reemplazarse por audio pregrabado estandarizado.
+
+REGLAS FIRESTORE
+Debe existir permiso de lectura, creación, actualización y eliminación para:
+artifacts/paneg-bd/data/moca_results/results/{resultId}
+
+EJEMPLO TEMPORAL:
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /artifacts/paneg-bd/data/moca_results/results/{resultId} {
+      allow create, read, update, delete: if request.auth != null;
+    }
+  }
+}
+
+SEGURIDAD
+La contraseña inicial del panel de investigadores es paneg2025. En producción debe sustituirse por Firebase Authentication con cuentas de investigador y reglas por roles.
+
+CAMBIOS PRINCIPALES
+- Consentimiento informado obligatorio.
+- Autorización de audio separada.
+- Dos ensayos de memoria.
+- Dígitos ocultos y respuestas inversas corregidas.
+- Vigilancia auditiva con conteo correcto de A.
+- Fluidez de 60 segundos sin retroalimentación durante la tarea.
+- Orientación en seis campos independientes.
+- Puntuación final pendiente de revisión profesional.
+- Panel para revisar y eliminar registros.

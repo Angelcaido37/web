@@ -1,1133 +1,1463 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { getAuth, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getFirestore,
+  onSnapshot,
+  updateDoc,
+} from 'firebase/firestore';
 
-// --- CONFIGURACIÓN FIREBASE PROPIA (paneg-bd) ---
+/*
+  PANEG–MoCA supervisado v1.5 (correcciones v12)
+  ------------------------------------------------------------
+  Prototipo técnico alineado con las guías MoCA 8.1 y 8.3.
+  No sustituye autorización de uso, capacitación/certificación
+  ni validación psicométrica de la adaptación digital.
+
+  Para estandarización final coloque los estímulos autorizados en:
+    public/stimuli/moca81/{trail.png,cube.png,animal1.png,animal2.png,animal3.png}
+    public/stimuli/moca83/{trail.png,bed.png,animal1.png,animal2.png,animal3.png}
+
+  Para audio pregrabado (recomendado), coloque archivos en:
+    public/audio/moca81/*.mp3
+    public/audio/moca83/*.mp3
+  Si un archivo no existe, se usa síntesis de voz del navegador como respaldo.
+*/
+
 const firebaseConfig = {
-  apiKey: "AIzaSyBrS7SpfCx2FUs3VohKMZAofdDwheo33aY",
-  authDomain: "paneg-bd.firebaseapp.com",
-  projectId: "paneg-bd",
-  storageBucket: "paneg-bd.firebasestorage.app",
-  messagingSenderId: "359193449567",
-  appId: "1:359193449567:web:2b7a82b5ceb115e1b677ea",
-  measurementId: "G-1RPEJZ3HFM"
+  apiKey: 'AIzaSyBrS7SpfCx2FUs3VohKMZAofdDwheo33aY',
+  authDomain: 'paneg-bd.firebaseapp.com',
+  projectId: 'paneg-bd',
+  storageBucket: 'paneg-bd.firebasestorage.app',
+  messagingSenderId: '359193449567',
+  appId: '1:359193449567:web:2b7a82b5ceb115e1b677ea',
+  measurementId: 'G-1RPEJZ3HFM',
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
 const appId = 'paneg-bd';
-// Ruta válida en Firestore: artifacts/{appId}/data/moca_results/results/{documentId}
+const RESULTS_PATH = ['artifacts', appId, 'data', 'moca_results', 'results'];
 
-// --- CONFIGURACIÓN DINÁMICA MOCA (8.1 vs 8.3) ---
-const MOCA_CONFIG = {
-  'Pretest': {
-    version: '8.1', color: 'blue',
-    visuoTitle: 'Cubo',
-    visuoInst: 'Copie el dibujo del cubo de la manera más precisa posible.',
-    visuoSvg: <path d="M30,30 L70,30 L70,70 L30,70 Z M50,10 L90,10 L90,50 L50,50 Z M30,30 L50,10 M70,30 L90,10 M70,70 L90,50 M30,70 L50,50" fill="none" stroke="currentColor" strokeWidth="2"/>,
-    relojInst: 'las once y diez (11:10)',
-    animales: [{name: 'Animal 1', emoji: '🦁'}, {name: 'Animal 2', emoji: '🦏'}, {name: 'Animal 3', emoji: '🐪'}],
-    palabras: ["ROSTRO", "SEDA", "TEMPLO", "CLAVEL", "ROJO"],
-    digitsAdelante: "2 1 8 5 4", digitsAtras: "7 4 2",
-    restaBase: 100,
-    frases: ["Solo sé que le toca a Juan ayudar hoy", "El gato siempre se esconde debajo del sofá cuando hay perros en la habitación"],
-    fluidezLetra: "F",
-    absPares: [{a: 'Tren', b: 'Bicicleta'}, {a: 'Reloj', b: 'Regla'}],
-    pistasCategoria: { ROSTRO: "parte del cuerpo", SEDA: "tipo de tela", TEMPLO: "tipo de edificio", CLAVEL: "tipo de flor", ROJO: "color" },
-    pistasOpciones: { ROSTRO: ["nariz", "rostro", "mano"], SEDA: ["tela vaquera", "seda", "algodón"], TEMPLO: ["templo", "escuela", "hospital"], CLAVEL: ["rosa", "clavel", "tulipán"], ROJO: ["rojo", "azul", "verde"] }
+const LETTER_SEQUENCE = 'FBACMNAAJKLBAFAKDEAAAJAMOFAAB'.split('');
+const TARGET_A_COUNT = LETTER_SEQUENCE.filter((letter) => letter === 'A').length;
+
+const VERSION_CONFIG = {
+  Pretest: {
+    label: 'Pretest',
+    version: '8.1',
+    theme: 'blue',
+    folder: 'moca81',
+    copyTitle: 'Cubo',
+    copyImage: '/stimuli/moca81/cube.png',
+    trailImage: '/stimuli/moca81/trail.png',
+    animalImages: [
+      '/stimuli/moca81/animal1.png',
+      '/stimuli/moca81/animal2.png',
+      '/stimuli/moca81/animal3.png',
+    ],
+    animalAnswers: [
+      ['leon'],
+      ['rinoceronte', 'rino'],
+      ['camello', 'dromedario'],
+    ],
+    clockText: '11:10',
+    words: ['ROSTRO', 'SEDA', 'TEMPLO', 'CLAVEL', 'ROJO'],
+    forwardDigits: ['2', '1', '8', '5', '4'],
+    backwardDigits: ['7', '4', '2'],
+    backwardExpected: '247',
+    serialStart: 100,
+    sentences: [
+      'Solo sé que le toca a Juan ayudar hoy.',
+      'El gato siempre se esconde debajo del sofá cuando hay perros en la habitación.',
+    ],
+    fluencyLetter: 'F',
+    abstractionPairs: [
+      ['Tren', 'Bicicleta'],
+      ['Regla', 'Reloj'],
+    ],
+    abstractionAccepted: [
+      ['medio de transporte', 'medios de transporte', 'medio de locomocion', 'medios de locomocion', 'para viajar', 'transporte'],
+      ['instrumento de medicion', 'instrumentos de medicion', 'para medir', 'medicion'],
+    ],
+    categoryCues: {
+      ROSTRO: 'parte del cuerpo',
+      SEDA: 'tipo de tela',
+      TEMPLO: 'tipo de edificio',
+      CLAVEL: 'tipo de flor',
+      ROJO: 'color',
+    },
+    multipleChoice: {
+      ROSTRO: ['nariz', 'rostro', 'mano'],
+      SEDA: ['tela vaquera', 'seda', 'algodón'],
+      TEMPLO: ['templo', 'escuela', 'hospital'],
+      CLAVEL: ['rosa', 'clavel', 'tulipán'],
+      ROJO: ['rojo', 'azul', 'verde'],
+    },
   },
-  'Postest': {
-    version: '8.3', color: 'teal',
-    visuoTitle: 'Cama',
-    visuoInst: 'Copie el dibujo de la cama de la manera más precisa posible.',
-    visuoSvg: <><path d="M 15 25 L 15 75 M 35 15 L 35 60 M 15 25 L 35 15 M 15 45 L 35 35" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M 15 75 L 75 75 L 90 60 L 35 60 Z" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M 75 75 L 75 85 L 90 70 L 90 60 M 15 75 L 15 85 L 75 85 M 20 60 L 35 52 L 50 52 L 35 60 Z" fill="none" stroke="currentColor" strokeWidth="2"/></>,
-    relojInst: 'las diez con cinco minutos (10:05)',
-    animales: [{name: 'Animal 1', emoji: '🐎'}, {name: 'Animal 2', emoji: '🐅'}, {name: 'Animal 3', emoji: '🦆'}],
-    palabras: ["PIERNA", "ALGODON", "ESCUELA", "TOMATE", "BLANCO"],
-    digitsAdelante: "2 4 8 1 5", digitsAtras: "4 2 7",
-    restaBase: 60,
-    frases: ["El niño paseaba a su perro en el parque después de medianoche", "El artista terminó su pintura en el momento exacto para la exhibición"],
-    fluidezLetra: "B",
-    absPares: [{a: 'Martillo', b: 'Desarmador'}, {a: 'Cerillos', b: 'Lámpara'}],
-    pistasCategoria: { PIERNA: "parte del cuerpo", ALGODON: "tipo de tela", ESCUELA: "edificio público", TOMATE: "tipo de alimento", BLANCO: "color" },
-    pistasOpciones: { PIERNA: ["mano", "pierna", "cara"], ALGODON: ["seda", "algodón", "naylon"], ESCUELA: ["escuela", "hospital", "biblioteca"], TOMATE: ["lechuga", "tomate", "zanahoria"], BLANCO: ["morado", "blanco", "verde"] }
-  }
+  Postest: {
+    label: 'Postest',
+    version: '8.3',
+    theme: 'teal',
+    folder: 'moca83',
+    copyTitle: 'Cama',
+    copyImage: '/stimuli/moca83/bed.png',
+    trailImage: '/stimuli/moca83/trail.png',
+    animalImages: [
+      '/stimuli/moca83/animal1.png',
+      '/stimuli/moca83/animal2.png',
+      '/stimuli/moca83/animal3.png',
+    ],
+    animalAnswers: [
+      ['caballo', 'poni', 'yegua', 'potro'],
+      ['tigre'],
+      ['pato'],
+    ],
+    clockText: '10:05',
+    words: ['PIERNA', 'ALGODÓN', 'ESCUELA', 'TOMATE', 'BLANCO'],
+    forwardDigits: ['2', '4', '8', '1', '5'],
+    backwardDigits: ['4', '2', '7'],
+    backwardExpected: '724',
+    serialStart: 60,
+    sentences: [
+      'El niño paseaba a su perro en el parque después de medianoche.',
+      'El artista terminó su pintura en el momento exacto para la exhibición.',
+    ],
+    fluencyLetter: 'B',
+    abstractionPairs: [
+      ['Martillo', 'Desarmador'],
+      ['Cerillos', 'Lámpara'],
+    ],
+    abstractionAccepted: [
+      ['herramienta', 'herramientas', 'carpinteria', 'construccion', 'instrumentos de trabajo', 'instrumento de trabajo'],
+      ['luz', 'luminosos', 'iluminacion', 'alumbrado'],
+    ],
+    categoryCues: {
+      PIERNA: 'parte del cuerpo',
+      'ALGODÓN': 'tipo de tela',
+      ESCUELA: 'edificio público',
+      TOMATE: 'tipo de alimento',
+      BLANCO: 'color',
+    },
+    multipleChoice: {
+      PIERNA: ['mano', 'pierna', 'cara'],
+      'ALGODÓN': ['seda', 'algodón', 'naylon'],
+      ESCUELA: ['escuela', 'hospital', 'biblioteca'],
+      TOMATE: ['lechuga', 'tomate', 'zanahoria'],
+      BLANCO: ['morado', 'blanco', 'verde'],
+    },
+  },
 };
-const secuenciaLetras = "FBACMNAAJKLBAFAKDEAAAJAMOFAAB".split("");
 
-// --- UTILS ---
-const normalizar = (str) => (str ? str.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "");
+const normalize = (value = '') =>
+  String(value)
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zñ0-9\s]/g, '')
+    .replace(/\s+/g, ' ');
 
-// Analiza la fluidez verbal: normaliza, valida la letra inicial y elimina repeticiones.
 
-// Elimina valores undefined antes de enviar datos a Firestore.
-// Firestore no acepta undefined dentro de objetos o arreglos.
-const limpiarParaFirestore = (valor) => {
-  if (valor === undefined) return null;
-  if (valor === null) return null;
-  if (Array.isArray(valor)) return valor.map(limpiarParaFirestore);
-  if (typeof valor === 'object') {
-    return Object.fromEntries(
-      Object.entries(valor)
-        .filter(([, v]) => v !== undefined && typeof v !== 'function')
-        .map(([k, v]) => [k, limpiarParaFirestore(v)])
-    );
-  }
-  return valor;
-};
+const toUpper = (value = '') => String(value).toLocaleUpperCase('es-MX');
 
-const tokenizarFluidez = (texto = "") =>
-  (texto.toLowerCase().match(/[a-záéíóúüñ]+/gi) || []).map(p => p.trim()).filter(Boolean);
+const analyzeFluencyTranscript = (transcript = '', targetLetter = '') => {
+  const tokens = String(transcript)
+    .split(/[\s,.;:!?¡¿()\[\]{}\-_/\\]+/)
+    .map((token) => normalize(token))
+    .filter(Boolean);
+  const seen = new Set();
+  const validCandidates = [];
+  const repeated = [];
+  const wrongInitial = [];
+  const tooShort = [];
+  const numbers = [];
+  const target = normalize(targetLetter);
 
-const unicosPorFormaNormalizada = (palabras = []) => {
-  const vistos = new Set();
-  return palabras.filter((palabra) => {
-    const clave = normalizar(palabra);
-    if (vistos.has(clave)) return false;
-    vistos.add(clave);
-    return true;
+  tokens.forEach((token) => {
+    if (/^\d+$/.test(token)) {
+      numbers.push(token);
+      return;
+    }
+    if (token.length < 2) {
+      tooShort.push(token);
+      return;
+    }
+    if (!token.startsWith(target)) {
+      wrongInitial.push(token);
+      return;
+    }
+    if (seen.has(token)) {
+      repeated.push(token);
+      return;
+    }
+    seen.add(token);
+    validCandidates.push(token);
   });
+
+  return {
+    tokens,
+    validCandidates,
+    repeated,
+    wrongInitial,
+    tooShort,
+    numbers,
+    suggestedPoint: validCandidates.length >= 11 ? 1 : 0,
+  };
 };
 
-const analizarFluidez = (texto = "", letraObjetivo = "F") => {
-  const letra = normalizar(letraObjetivo);
-  const ingresadas = tokenizarFluidez(texto);
-  const conLetraCorrecta = ingresadas.filter((palabra) => normalizar(palabra).startsWith(letra));
-  const validas = unicosPorFormaNormalizada(conLetraCorrecta);
-  const clavesVistas = new Set();
-  const repetidas = unicosPorFormaNormalizada(conLetraCorrecta.filter((palabra) => {
-    const clave = normalizar(palabra);
-    if (clavesVistas.has(clave)) return true;
-    clavesVistas.add(clave);
-    return false;
-  }));
-  const letraIncorrecta = unicosPorFormaNormalizada(
-    ingresadas.filter((palabra) => !normalizar(palabra).startsWith(letra))
+const countExactWords = (responses = [], expected = []) => {
+  const remaining = expected.map(normalize);
+  let count = 0;
+  responses.forEach((response) => {
+    const index = remaining.indexOf(normalize(response));
+    if (index >= 0) {
+      count += 1;
+      remaining.splice(index, 1);
+    }
+  });
+  return count;
+};
+
+const suggestedNamingScore = (record, config) =>
+  (record.naming || []).reduce((sum, response, index) => {
+    const valid = (config.animalAnswers[index] || []).map(normalize);
+    return sum + (valid.includes(normalize(response)) ? 1 : 0);
+  }, 0);
+
+const suggestedRepetitionScore = (record, config) =>
+  config.sentences.reduce(
+    (sum, sentence, index) =>
+      sum + (normalize(record.language?.[`sentence${index + 1}`]) === normalize(sentence) ? 1 : 0),
+    0,
   );
 
-  return { ingresadas, validas, repetidas, letraIncorrecta, cantidadValidas: validas.length };
+const suggestedAbstractionScore = (record, config) =>
+  config.abstractionAccepted.reduce((sum, accepted, index) => {
+    const answer = normalize(record.abstraction?.[`pair${index + 1}`]);
+    const correct = accepted.some((option) => {
+      const normalizedOption = normalize(option);
+      return answer === normalizedOption || answer.includes(normalizedOption);
+    });
+    return sum + (correct ? 1 : 0);
+  }, 0);
+
+const cleanFirestore = (value) => {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(cleanFirestore);
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined && typeof item !== 'function')
+        .map(([key, item]) => [key, cleanFirestore(item)]),
+    );
+  }
+  return value;
 };
 
-const existeEnDiccionarioEspanol = async (palabra) => {
-  if (!palabra || palabra.length < 2) return false;
-  const respuesta = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/es/${encodeURIComponent(palabra)}`);
-  if (respuesta.ok) return true;
-  if (respuesta.status === 404) return false;
-  throw new Error(`Servicio de diccionario no disponible (${respuesta.status})`);
+const todayParts = () => {
+  const now = new Date();
+  return {
+    day: now.getDate(),
+    month: now.getMonth() + 1,
+    year: now.getFullYear(),
+    weekday: now
+      .toLocaleDateString('es-MX', { weekday: 'long' })
+      .toLowerCase(),
+  };
 };
 
-// --- CANVAS COMPONENT ---
-const DrawingCanvas = ({ onSave }) => {
+const initialConsent = {
+  read: false,
+  participate: false,
+  audio: false,
+  adult: false,
+  participantName: '',
+  acceptedAt: null,
+  version: 'PANEG-CI-1.0',
+};
+
+const initialAnswers = (phase, version) => ({
+  phase,
+  version,
+  participant: {
+    name: '',
+    age: '',
+    educationYears: '',
+    group: 'Experimental (Uso de IAGen)',
+    birthDate: '',
+    sex: '',
+  },
+  consent: { ...initialConsent },
+  trail: { drawing: null, pointsAuto: 0 },
+  copyDrawing: null,
+  clockDrawing: null,
+  naming: ['', '', ''],
+  memoryTrial1: ['', '', '', '', ''],
+  memoryTrial2: ['', '', '', '', ''],
+  attention: {
+    forward: '',
+    backward: '',
+    vigilanceHits: 0,
+    vigilanceFalseAlarms: 0,
+    vigilanceOmissions: TARGET_A_COUNT,
+    serial7: ['', '', '', '', ''],
+  },
+  language: {
+    sentence1: '',
+    sentence2: '',
+    fluencyTranscript: '',
+    fluencyWordCountSuggested: 0,
+  },
+  abstraction: {
+    example: '',
+    promptUsed: false,
+    pair1: '',
+    pair2: '',
+  },
+  delayedRecall: {
+    free: ['', '', '', '', ''],
+    category: {},
+    multipleChoice: {},
+  },
+  orientation: {
+    day: '',
+    month: '',
+    year: '',
+    weekday: '',
+    place: '',
+    city: '',
+  },
+  administration: {
+    supervised: true,
+    instructionRepeatCount: {},
+    startedAt: null,
+    completedAt: null,
+    memoryLearningCompletedAt: null,
+    delayedRecallStartedAt: null,
+    audioMode: 'browser-synthesis-fallback',
+  },
+});
+
+function PageHeader({ phase, version, progress, theme }) {
+  return (
+    <header className="fixed left-0 right-0 top-0 z-20 border-b bg-white px-5 py-4 shadow-sm">
+      <div className="mx-auto flex max-w-5xl items-center gap-5">
+        <h1 className="font-black text-slate-900">PANEG · {phase} v{version}</h1>
+        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+          <div className={`h-full ${theme === 'blue' ? 'bg-blue-600' : 'bg-teal-600'}`} style={{ width: `${progress}%` }} />
+        </div>
+        <span className="text-xs font-bold">{progress}%</span>
+      </div>
+    </header>
+  );
+}
+
+function PageCard({ children }) {
+  return <div className="mx-auto w-full max-w-4xl rounded-3xl bg-white p-6 shadow-xl md:p-10">{children}</div>;
+}
+
+function NextStepButton({ disabled = false, onClick, children = 'Siguiente', themeClass }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} className={`mt-8 w-full rounded-xl py-4 font-black text-white disabled:opacity-40 ${themeClass}`}>
+      {children}
+    </button>
+  );
+}
+
+function TrailDrawingCanvas({ image, value, onChange }) {
   const canvasRef = useRef(null);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const drawingRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    canvas.width = canvas.offsetWidth;
-    canvas.height = 300;
+    if (!canvas) return;
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(canvas.clientWidth, 320);
+    const height = 420;
+    canvas.width = width * ratio;
+    canvas.height = height * ratio;
     const ctx = canvas.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, width, height);
     ctx.lineCap = 'round';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = '#1e293b';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#2563eb';
+    if (value) {
+      const saved = new Image();
+      saved.onload = () => ctx.drawImage(saved, 0, 0, width, height);
+      saved.src = value;
+    }
   }, []);
 
-  const startDrawing = (e) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-    const y = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
+  const point = (event) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  const start = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
+    canvasRef.current.setPointerCapture?.(event.pointerId);
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = point(event);
     ctx.beginPath();
     ctx.moveTo(x, y);
-    setIsDrawing(true);
+    drawingRef.current = true;
+  };
+  const move = (event) => {
+    if (!drawingRef.current) return;
+    event.preventDefault();
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = point(event);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+  const stop = () => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
+  };
+  const clear = () => {
+    const canvas = canvasRef.current;
+    const ratio = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width / ratio, canvas.height / ratio);
+    onChange(null);
   };
 
-  const draw = (e) => {
-    if (!isDrawing) return;
+  return (
+    <div>
+      <div className="relative mx-auto h-[420px] max-w-2xl overflow-hidden rounded-2xl border-2 border-slate-300 bg-white">
+        <img src={image} alt="Plantilla autorizada de alternancia" className="pointer-events-none absolute inset-0 h-full w-full object-contain p-3" />
+        <canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={stop} onPointerCancel={stop} onPointerLeave={stop} className="absolute inset-0 h-full w-full touch-none" />
+      </div>
+      <p className="mt-3 text-sm text-slate-500">Trace una línea continua sobre la plantilla. Puede corregir inmediatamente antes de pasar a la actividad siguiente.</p>
+      <button type="button" onClick={clear} className="mt-3 rounded-lg bg-slate-200 px-4 py-2 font-bold text-slate-700">Borrar y reiniciar trazo</button>
+    </div>
+  );
+}
+
+function DrawingCanvas({ value, onChange, label }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(canvas.clientWidth, 320);
+    const height = 320;
+    canvas.width = width * ratio;
+    canvas.height = height * ratio;
     const ctx = canvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#0f172a';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    if (value) {
+      const image = new Image();
+      image.onload = () => ctx.drawImage(image, 0, 0, width, height);
+      image.src = value;
+    }
+  }, []);
+
+  const coordinates = (event) => {
+    const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-    const y = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
+    const source = event.touches?.[0] || event;
+    return { x: source.clientX - rect.left, y: source.clientY - rect.top };
+  };
+
+  const start = (event) => {
+    event.preventDefault();
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = coordinates(event);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    drawingRef.current = true;
+  };
+
+  const move = (event) => {
+    if (!drawingRef.current) return;
+    event.preventDefault();
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = coordinates(event);
     ctx.lineTo(x, y);
     ctx.stroke();
   };
 
-  const stopDrawing = () => {
-    setIsDrawing(false);
-    onSave(canvasRef.current.toDataURL());
+  const stop = () => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
   };
 
-  const clearCanvas = () => {
+  const clear = () => {
     const canvas = canvasRef.current;
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    onSave(null);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    onChange(null);
   };
 
   return (
-    <div className="flex flex-col items-center w-full">
-      <canvas ref={canvasRef} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onTouchStart={(e) => { e.preventDefault(); startDrawing(e); }} onTouchMove={(e) => { e.preventDefault(); draw(e); }} onTouchEnd={stopDrawing} className="w-full max-w-md bg-white border-2 border-slate-300 rounded-lg shadow-inner cursor-crosshair touch-none" />
-      <button onClick={clearCanvas} className="mt-2 text-sm text-red-500 font-medium">Borrar y empezar de nuevo</button>
+    <div className="w-full">
+      <p className="mb-2 text-sm font-bold text-slate-600">{label}</p>
+      <canvas
+        ref={canvasRef}
+        onMouseDown={start}
+        onMouseMove={move}
+        onMouseUp={stop}
+        onMouseLeave={stop}
+        onTouchStart={start}
+        onTouchMove={move}
+        onTouchEnd={stop}
+        className="h-80 w-full touch-none rounded-xl border-2 border-slate-300 bg-white shadow-inner"
+      />
+      <button type="button" onClick={clear} className="mt-2 text-sm font-bold text-red-600">
+        Borrar dibujo
+      </button>
     </div>
   );
+}
+
+function StimulusImage({ src, alt }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="flex h-48 w-full items-center justify-center rounded-xl border-2 border-dashed border-orange-300 bg-orange-50 p-4 text-center text-sm font-bold text-orange-700">
+        Falta instalar el estímulo autorizado: {src}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      className="max-h-56 w-full rounded-xl border border-slate-200 bg-white object-contain p-3"
+    />
+  );
+}
+
+function ScoreInput({ label, max, value, onChange }) {
+  return (
+    <label className="flex items-center justify-between gap-4 rounded-xl border border-violet-200 bg-violet-50 p-3">
+      <span className="font-black text-violet-950">{label} <span className="font-normal text-violet-700">(0–{max})</span></span>
+      <input
+        type="number"
+        min="0"
+        max={max}
+        className="w-20 rounded-lg border-2 border-violet-200 bg-white p-2 text-center font-black"
+        value={value}
+        onChange={(event) => onChange(Math.max(0, Math.min(max, Number(event.target.value))))}
+      />
+    </label>
+  );
+}
+
+function TrailEvidence({ stimulus, drawing }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <div className="rounded-xl border bg-white p-3">
+        <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Plantilla y trazo superpuesto</p>
+        <div className="relative h-72 overflow-hidden rounded-lg border bg-white">
+          <img src={stimulus} alt="Plantilla de alternancia" className="absolute inset-0 h-full w-full object-contain p-2" />
+          {drawing && <img src={drawing} alt="Trazo del participante" className="absolute inset-0 h-full w-full object-fill" />}
+        </div>
+      </div>
+      <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-700">
+        <p className="font-black">Criterio de evaluación</p>
+        <p className="mt-2">Secuencia 1–A–2–B–3–C–4–D–5–E, sin cruces, sin unir E con 1 y con autocorrección inmediata cuando corresponda.</p>
+      </div>
+    </div>
+  );
+}
+
+function DrawingEvidence({ stimulus, drawing, stimulusLabel, responseLabel = 'Dibujo del participante' }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <div className="rounded-xl border bg-white p-3">
+        <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">{stimulusLabel}</p>
+        {stimulus ? <img src={stimulus} alt={stimulusLabel} className="h-64 w-full rounded-lg border bg-white object-contain p-2" /> : <div className="flex h-64 items-center justify-center rounded-lg border bg-slate-50 p-5 text-center text-sm font-bold text-slate-600">La guía no muestra un reloj modelo. El participante debe dibujarlo de memoria con la hora indicada.</div>}
+      </div>
+      <div className="rounded-xl border bg-white p-3">
+        <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">{responseLabel}</p>
+        {drawing ? <img src={drawing} alt={responseLabel} className="h-64 w-full rounded-lg border bg-white object-contain" /> : <div className="flex h-64 items-center justify-center text-slate-400">Sin dibujo guardado</div>}
+      </div>
+    </div>
+  );
+}
+
+function AudioButton({ src, text, disabled, onceKey, played, onPlayed, label = 'Escuchar estímulo', speechRate = 0.9 }) {
+  const [playing, setPlaying] = useState(false);
+  const play = async () => {
+    if (disabled || playing || played) return;
+    setPlaying(true);
+    const finish = () => {
+      setPlaying(false);
+      onPlayed?.(onceKey);
+    };
+
+    try {
+      if (src) {
+        const audio = new Audio(src);
+        audio.onended = finish;
+        audio.onerror = () => {
+          if (!('speechSynthesis' in window)) throw new Error('Audio no disponible');
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = 'es-MX';
+          utterance.rate = speechRate;
+          utterance.onend = finish;
+          utterance.onerror = finish;
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(utterance);
+        };
+        await audio.play();
+      } else if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'es-MX';
+        utterance.rate = speechRate;
+        utterance.onend = finish;
+        utterance.onerror = finish;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+      } else {
+        finish();
+        alert('Este navegador no dispone de reproducción de voz. Instale los archivos de audio pregrabados.');
+      }
+    } catch (error) {
+      console.error(error);
+      finish();
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={play}
+      disabled={disabled || playing || played}
+      className="rounded-xl bg-indigo-600 px-5 py-3 font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {playing ? 'Reproduciendo…' : played ? 'Estímulo reproducido' : label}
+    </button>
+  );
+}
+
+function Countdown({ active, seconds, onFinish }) {
+  const [remaining, setRemaining] = useState(seconds);
+  useEffect(() => setRemaining(seconds), [seconds, active]);
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => {
+      setRemaining((current) => {
+        if (current <= 1) {
+          window.clearInterval(timer);
+          onFinish?.();
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [active, onFinish]);
+  return <span className="text-4xl font-black tabular-nums text-slate-800">{remaining}s</span>;
+}
+
+const consentText = {
+  title: 'Consentimiento informado para participar en el estudio',
+  body: [
+    ['Responsable e institución', 'La investigación es conducida por el Dr. Oscar Gabriel Vizcaino Monroy, de la Universidad Autónoma de Nayarit.'],
+    ['Objetivo del estudio', 'El propósito de esta investigación es analizar cómo el uso de herramientas de inteligencia artificial generativa puede influir en el desempeño de estudiantes universitarios en diversas tareas académicas.'],
+    ['Población participante', 'Este estudio está dirigido exclusivamente a personas adultas de 18 años o más. No participarán menores de edad.'],
+    ['Actividades y duración', 'Se le solicitará responder una evaluación cognitiva que incluye actividades de escucha, respuesta verbal, identificación de imágenes, cálculo y dibujo. La duración estimada es de 10 a 20 minutos.'],
+    ['Participación voluntaria', 'Su participación es completamente voluntaria. Puede retirarse en cualquier momento, solicitar una pausa o decidir no responder alguna actividad, sin sanción ni consecuencia académica, laboral o personal.'],
+    ['Confidencialidad y anonimato', 'La información será identificada mediante un folio y utilizada únicamente con fines académicos y de investigación. Los resultados se comunicarán de manera agrupada procurando que ninguna persona sea identificada.'],
+    ['Riesgos y beneficios', 'No se anticipan riesgos físicos significativos. Algunas actividades pueden generar cansancio, frustración o incomodidad leve. No se garantiza un beneficio directo; los resultados pueden contribuir al conocimiento sobre inteligencia artificial y educación.'],
+    ['Grabación de voz', 'Algunas respuestas pueden grabarse únicamente si usted lo autoriza por separado. La grabación se utilizará para revisar y puntuar las tareas y no se compartirá fuera del equipo autorizado.'],
+    ['Conservación de datos', 'Los datos y, cuando corresponda, las grabaciones autorizadas se conservarán durante un año a partir de su recolección. Después serán eliminados o anonimizados conforme al protocolo de investigación y las disposiciones institucionales aplicables.'],
+    ['Contacto', 'Para dudas sobre el estudio, su participación o el tratamiento de sus datos, puede comunicarse con el Dr. Oscar Gabriel Vizcaino Monroy al correo oscar.vizcaino@uan.edu.mx o al teléfono 311-110-51-49.'],
+  ],
 };
 
-const AnimalImage = ({ name, emoji }) => (
-  <div className="flex flex-col items-center justify-center w-28 h-28 sm:w-32 sm:h-32 bg-slate-100 rounded-xl border-2 border-slate-200 shadow-sm">
-    <span className="text-5xl sm:text-6xl">{emoji}</span>
-    <span className="text-[10px] sm:text-xs text-slate-400 mt-2 font-mono uppercase tracking-widest opacity-60">{name}</span>
-  </div>
-);
 
-// --- MAIN APP ---
+function ScoringGuide({ title = "Cómo calificar según la guía", children }) {
+  return (
+    <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+      <summary className="cursor-pointer font-black text-slate-900">{title}</summary>
+      <div className="mt-3 space-y-2 leading-relaxed">{children}</div>
+    </details>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [guardando, setGuardando] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [saveSuccess, setSaveSuccess] = useState('');
-  const [appState, setAppState] = useState('home');
-  
-  // Participant State
-  const [faseSelect, setFaseSelect] = useState('Pretest');
+  const [screen, setScreen] = useState('home');
+  const [phase, setPhase] = useState('Pretest');
   const [step, setStep] = useState(0);
-  const [formData, setFormData] = useState({});
-  const [interactive, setInteractive] = useState({ memoriaPaso: 0, letraActual: '', letrasActivas: false, letrasTerminadas: false, fluidezActiva: false, fluidezTerminada: false, tiempoFluidez: 60, fluidezValidando: false, fluidezDiccionario: { validas: [], invalidas: [], error: '' }, frasesEscuchadas: [false, false], fraseReproduciendo: null, faltantesCat: [], faltantesOpc: [] });
+  const [answers, setAnswers] = useState(() => initialAnswers('Pretest', '8.1'));
+  const [played, setPlayed] = useState({});
+  const [vigilanceActive, setVigilanceActive] = useState(false);
+  const [vigilanceCurrent, setVigilanceCurrent] = useState('');
+  const [vigilanceIndex, setVigilanceIndex] = useState(-1);
+  const [fluencyActive, setFluencyActive] = useState(false);
+  const [fluencyFinished, setFluencyFinished] = useState(false);
+  const [vigilanceTapFeedback, setVigilanceTapFeedback] = useState(false);
+  const [fluencyAudioUrl, setFluencyAudioUrl] = useState('');
+  const [fluencyRecording, setFluencyRecording] = useState(false);
+  const [fluencyMicError, setFluencyMicError] = useState('');
+  const [fluencyRecognitionStatus, setFluencyRecognitionStatus] = useState('');
+  const [fluencyInterimTranscript, setFluencyInterimTranscript] = useState('');
+  const [microphones, setMicrophones] = useState([]);
+  const [selectedMicId, setSelectedMicId] = useState('');
+  const [micTestStatus, setMicTestStatus] = useState('');
+  const [micTestLevel, setMicTestLevel] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
+  const fluencyActiveRef = useRef(false);
+  const mediaChunksRef = useRef([]);
+  const tappedVigilanceIndexRef = useRef(-1);
+  const micPeakRef = useRef(0);
+  const micMonitorFrameRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const [saveMessage, setSaveMessage] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [evaluatorPassword, setEvaluatorPassword] = useState('');
+  const [evaluatorUnlocked, setEvaluatorUnlocked] = useState(false);
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [manual, setManual] = useState({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 });
 
-  // Evaluator State
-  const [evalPass, setEvalPass] = useState('');
-  const [dbEvalPass, setDbEvalPass] = useState('paneg2025');
-  const [loginError, setLoginError] = useState('');
-  const [oldPass, setOldPass] = useState('');
-  const [newPass, setNewPass] = useState('');
-  const [passMsg, setPassMsg] = useState('');
-  const [passErr, setPassErr] = useState('');
-  const [resultados, setResultados] = useState([]);
-  const [selectedRes, setSelectedRes] = useState(null);
-  const [manualScores, setManualScores] = useState({ visuo1: 0, reloj: 0 });
-  const [dashTab, setDashTab] = useState('list');
-  const [orientationError, setOrientationError] = useState('');
+  const cfg = VERSION_CONFIG[phase];
+  const theme = cfg.theme === 'blue' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-teal-600 hover:bg-teal-700';
+  const totalSteps = 16;
 
-  const cfg = MOCA_CONFIG[faseSelect] || MOCA_CONFIG['Pretest'];
-
-  // Auth Initialization
   useEffect(() => {
-    let cancelled = false;
-
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (cancelled) return;
-
-      if (currentUser) {
-        setUser(currentUser);
+    const unsubscribe = onAuthStateChanged(auth, async (current) => {
+      if (current) {
+        setUser(current);
         setAuthReady(true);
-        setAuthError('');
-        return;
-      }
-
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Auth error:", error);
-        setAuthError(`No fue posible iniciar la sesión anónima: ${error.code || error.message}`);
-        setAuthReady(true);
+      } else {
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error(error);
+          setAuthReady(true);
+        }
       }
     });
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
+    return unsubscribe;
   }, []);
 
-  // Fetch Results
   useEffect(() => {
-    if (appState === 'evaluator_dash' && user) {
-      const q = collection(db, 'artifacts', appId, 'data', 'moca_results', 'results');
-      return onSnapshot(q, (snapshot) => {
-        const docs = [];
-        snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
-        docs.sort((a, b) => b.timestamp - a.timestamp);
-        setResultados(docs);
-      }, (err) => console.error("Firestore read error:", err));
-    }
-  }, [appState, user]);
+    if (!evaluatorUnlocked || !user) return undefined;
+    const ref = collection(db, ...RESULTS_PATH);
+    return onSnapshot(ref, (snapshot) => {
+      const rows = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+      setResults(rows);
+    });
+  }, [evaluatorUnlocked, user]);
 
-  // Fetch Settings (Password)
+
   useEffect(() => {
-    if (user) {
-      const confRef = doc(db, 'artifacts', appId, 'data', 'config_eval_settings');
-      return onSnapshot(confRef, (snap) => {
-        if (snap.exists() && snap.data().password) setDbEvalPass(snap.data().password);
-      }, (err) => console.error("Config read error:", err));
-    }
-  }, [user]);
+    const loadMicrophones = async () => {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter((device) => device.kind === 'audioinput');
+        setMicrophones(inputs);
+        if (!selectedMicId && inputs[0]?.deviceId) setSelectedMicId(inputs[0].deviceId);
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    loadMicrophones();
+    navigator.mediaDevices?.addEventListener?.('devicechange', loadMicrophones);
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', loadMicrophones);
+  }, [selectedMicId]);
 
-  // --- PARTICIPANT FLOW ---
-  const initParticipant = () => {
-    // Cada nueva evaluación debe iniciar completamente limpia.
-    // Sin este reinicio, el Postest heredaba del Pretest estados como
-    // memoria finalizada, letras terminadas, fluidez bloqueada y el folio anterior.
-    setSaveError('');
-    setSaveSuccess('');
-    setGuardando(false);
-
-    setInteractive({
-      memoriaPaso: 0,
-      letraActual: '',
-      letrasActivas: false,
-      letrasTerminadas: false,
-      fluidezActiva: false,
-      fluidezTerminada: false,
-      tiempoFluidez: 60,
-      fluidezValidando: false,
-      fluidezDiccionario: { validas: [], invalidas: [], error: '' },
-      frasesEscuchadas: [false, false],
-      fraseReproduciendo: null,
-      faltantesCat: [],
-      faltantesOpc: []
-    });
-
-    setFormData({
-      nombre: '', edad: '', educacion: '', fase: faseSelect, grupo: 'Experimental', version: cfg.version,
-      alternancia: [], visuo1Img: null, relojImg: null, animal1: '', animal2: '', animal3: '',
-      numerosAdelante: '', numerosAtras: '', letrasErrores: 0, letrasAciertos: 0, restas: ['', '', '', '', ''],
-      frase1: '', frase2: '', fluidez: '', fluidezValidadas: [], fluidezInvalidas: [], similitud1: '', similitud2: '',
-      recuerdoEspontaneo: ['', '', '', '', ''], recuerdoCategoria: {}, recuerdoOpcion: {}, fecha: '', lugar: '', localidad: ''
-    });
-    setOrientationError('');
-    setStep(0);
-    setAppState('participant_test');
-  };
-
-  const handleAlternancia = (val) => { if (!formData.alternancia.includes(val)) setFormData({ ...formData, alternancia: [...formData.alternancia, val] }); };
-
-  const startTimer = (type) => {
-    if (type === 'memoria') {
-      setInteractive(prev => ({...prev, memoriaPaso: 1}));
-      let i = 0;
-      const t = setInterval(() => {
-        if (i < cfg.palabras.length) { setInteractive(prev => ({...prev, letraActual: cfg.palabras[i]})); i++; } 
-        else { clearInterval(t); setInteractive(prev => ({...prev, letraActual: '', memoriaPaso: 2})); }
-      }, 1000);
-    } else if (type === 'letras') {
-      setInteractive(prev => ({...prev, letrasActivas: true}));
-      let i = 0;
-      const t = setInterval(() => {
-        if (i < secuenciaLetras.length) { setInteractive(prev => ({...prev, letraActual: secuenciaLetras[i]})); i++; } 
-        else { clearInterval(t); setInteractive(prev => ({...prev, letraActual: '', letrasActivas: false, letrasTerminadas: true})); }
-      }, 1000);
-    } else if (type === 'fluidez') {
-      setInteractive(prev => ({...prev, fluidezActiva: true, tiempoFluidez: 60}));
-      let time = 60;
-      const t = setInterval(() => {
-        time -= 1;
-        setInteractive(prev => ({...prev, tiempoFluidez: time}));
-        if (time <= 0) { clearInterval(t); setInteractive(prev => ({...prev, fluidezActiva: false, fluidezTerminada: true})); }
-      }, 1000);
-    }
-  };
-
-  const tapLetra = (e) => {
-    e.preventDefault();
-    if (interactive.letraActual === 'A') setFormData(p => ({ ...p, letrasAciertos: p.letrasAciertos + 1 }));
-    else if (interactive.letraActual !== '') setFormData(p => ({ ...p, letrasErrores: p.letrasErrores + 1 }));
-  };
-
-  const escucharFrase = (indice) => {
-    if (!('speechSynthesis' in window) || interactive.frasesEscuchadas[indice] || interactive.fraseReproduciendo !== null) return;
-    const utterance = new SpeechSynthesisUtterance(cfg.frases[indice]);
-    utterance.lang = 'es-MX';
-    utterance.rate = 0.88;
-    utterance.pitch = 1;
-    utterance.onstart = () => setInteractive(prev => ({ ...prev, fraseReproduciendo: indice }));
-    utterance.onend = () => setInteractive(prev => {
-      const escuchadas = [...prev.frasesEscuchadas];
-      escuchadas[indice] = true;
-      return { ...prev, frasesEscuchadas: escuchadas, fraseReproduciendo: null };
-    });
-    utterance.onerror = () => setInteractive(prev => ({ ...prev, fraseReproduciendo: null }));
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const validarFluidezDiccionario = async () => {
-    const analisis = analizarFluidez(formData.fluidez, cfg.fluidezLetra);
-    setInteractive(prev => ({ ...prev, fluidezValidando: true, fluidezDiccionario: { validas: [], invalidas: [], error: '' } }));
+  const testMicrophone = async () => {
+    setMicTestStatus('Solicitando acceso al micrófono…');
+    setMicTestLevel(0);
     try {
-      const resultadosDiccionario = await Promise.all(
-        analisis.validas.map(async palabra => ({ palabra, existe: await existeEnDiccionarioEspanol(palabra) }))
-      );
-      const validas = resultadosDiccionario.filter(r => r.existe).map(r => r.palabra);
-      const invalidas = resultadosDiccionario.filter(r => !r.existe).map(r => r.palabra);
-      setFormData(prev => ({ ...prev, fluidezValidadas: validas, fluidezInvalidas: invalidas }));
-      setInteractive(prev => ({ ...prev, fluidezValidando: false, fluidezDiccionario: { validas, invalidas, error: '' } }));
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true,
+      });
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        setMicTestStatus('El navegador permitió el micrófono, pero no puede medir su nivel.');
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const context = new AudioContextClass();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let peak = 0;
+      const started = performance.now();
+      await new Promise((resolve) => {
+        const monitor = () => {
+          analyser.getByteTimeDomainData(data);
+          let currentPeak = 0;
+          for (const sample of data) currentPeak = Math.max(currentPeak, Math.abs(sample - 128));
+          peak = Math.max(peak, currentPeak);
+          setMicTestLevel(Math.min(100, Math.round(currentPeak * 4)));
+          if (performance.now() - started < 4000) window.requestAnimationFrame(monitor);
+          else resolve();
+        };
+        monitor();
+      });
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      if (peak < 3) setMicTestStatus('No se detectó voz. Seleccione otro micrófono o revise que no esté silenciado.');
+      else if (peak < 8) setMicTestStatus('Se detectó señal muy baja. Acérquese al micrófono o aumente el nivel de entrada.');
+      else setMicTestStatus('Micrófono listo: se detectó voz correctamente.');
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setMicrophones(devices.filter((device) => device.kind === 'audioinput'));
     } catch (error) {
-      setInteractive(prev => ({ ...prev, fluidezValidando: false, fluidezDiccionario: { validas: [], invalidas: [], error: 'No fue posible consultar el diccionario. Revise la conexión y vuelva a intentar.' } }));
+      console.error(error);
+      setMicTestStatus('No fue posible usar el micrófono. Revise el permiso del navegador y Windows.');
     }
   };
 
-  useEffect(() => {
-    if (interactive.fluidezTerminada && formData.fluidez && !interactive.fluidezValidando && interactive.fluidezDiccionario.validas.length === 0 && interactive.fluidezDiccionario.invalidas.length === 0 && !interactive.fluidezDiccionario.error) {
-      validarFluidezDiccionario();
-    }
-  }, [interactive.fluidezTerminada]);
-
-  const evaluarMIS = (etapa) => {
-    if (etapa === 'espontaneo') {
-      const resp = formData.recuerdoEspontaneo.map(normalizar);
-      const faltantes = cfg.palabras.filter(p => !resp.includes(normalizar(p)));
-      if (faltantes.length > 0) { setInteractive(p => ({...p, faltantesCat: faltantes})); setStep(12.1); } else setStep(13);
-    } else if (etapa === 'categoria') {
-      const faltantes = interactive.faltantesCat.filter(p => normalizar(formData.recuerdoCategoria[p]) !== normalizar(p));
-      if (faltantes.length > 0) { setInteractive(p => ({...p, faltantesOpc: faltantes})); setStep(12.2); } else setStep(13);
-    }
-  };
-
-  const autoScore = (data, config) => {
-    let pts = 0, mis = 0;
-    if (JSON.stringify(data.alternancia) === JSON.stringify(['1','A','2','B','3','C','4','D','5','E'])) pts += 1;
-    
-    const a1 = normalizar(data.animal1), a2 = normalizar(data.animal2), a3 = normalizar(data.animal3);
-    if (config.version === '8.1') {
-      if (a1.includes('leon')) pts+=1; if (a2.includes('rino')) pts+=1; if (a3.includes('camel')||a3.includes('drome')) pts+=1;
-    } else {
-      if (a1.includes('caballo')||a1.includes('yegua')||a1.includes('poni')) pts+=1; if (a2.includes('tigre')) pts+=1; if (a3.includes('pato')) pts+=1;
-    }
-
-    const nAd = data.numerosAdelante.replace(/\s/g, ''), nAt = data.numerosAtras.replace(/\s/g, '');
-    if (config.version === '8.1') { if (nAd==='21854') pts+=1; if (nAt==='742') pts+=1; } 
-    else { if (nAd==='24815') pts+=1; if (nAt==='427') pts+=1; }
-
-    if ((data.letrasErrores + (8 - data.letrasAciertos)) <= 1) pts += 1;
-
-    let restasC = 0, current = config.restaBase;
-    data.restas.forEach(r => { if (r!=='' && parseInt(r) === current - 7) restasC++; current = parseInt(r) || current; });
-    if (restasC >= 4) pts += 3; else if (restasC >= 2) pts += 2; else if (restasC === 1) pts += 1;
-
-    const f1 = normalizar(data.frase1).replace(/[.,]/g, ''), f2 = normalizar(data.frase2).replace(/[.,]/g, '');
-    if (config.version === '8.1') {
-      if (f1 === 'solo se que le toca a juan ayudar hoy') pts+=1;
-      if (f2 === 'el gato siempre se esconde debajo del sofa cuando hay perros en la habitacion') pts+=1;
-    } else {
-      if (f1 === 'el nino paseaba a su perro en el parque despues de medianoche') pts+=1;
-      if (f2 === 'el artista termino su pintura en el momento exacto para la exhibicion') pts+=1;
-    }
-
-    const fluidezAnalizada = analizarFluidez(data.fluidez, config.fluidezLetra);
-    const cantidadFluidezConfirmada = Array.isArray(data.fluidezValidadas) ? data.fluidezValidadas.length : 0;
-    if (cantidadFluidezConfirmada >= 11) pts += 1;
-
-    const s1 = normalizar(data.similitud1), s2 = normalizar(data.similitud2);
-    if (config.version === '8.1') {
-      if (s1.includes('transporte')||s1.includes('viaj')||s1.includes('locomocion')) pts+=1;
-      if (s2.includes('medir')||s2.includes('medicion')||s2.includes('instrumento')) pts+=1;
-    } else {
-      if (s1.includes('herramienta')||s1.includes('carpinteria')||s1.includes('construccion')||s1.includes('instrumento')) pts+=1;
-      if (s2.includes('luz')||s2.includes('iluminacion')||s2.includes('brillo')) pts+=1;
-    }
-
-    const respEsp = data.recuerdoEspontaneo.map(normalizar);
-    config.palabras.forEach(p => {
-      const pN = normalizar(p);
-      if (respEsp.includes(pN)) { pts+=1; mis+=3; }
-      else if (normalizar(data.recuerdoCategoria[p]) === pN) mis+=2;
-      else if (normalizar(data.recuerdoOpcion[p]) === pN) mis+=1;
-    });
-
-    if (data.fecha) pts+=1; if (data.lugar) pts+=1; if (data.localidad) pts+=1;
-    return { total: pts, misScore: mis };
-  };
-
-  const submitTest = async () => {
-    if (guardando) return;
-
+  const startPhase = () => {
+    const config = VERSION_CONFIG[phase];
+    setAnswers(initialAnswers(phase, config.version));
+    setPlayed({});
+    setStep(0);
+    setSaveMessage('');
     setSaveError('');
-    setSaveSuccess('');
+    setFluencyActive(false);
+    setFluencyFinished(false);
+    setFluencyAudioUrl('');
+    setFluencyRecording(false);
+    setFluencyMicError('');
+    setFluencyRecognitionStatus('');
+    setFluencyInterimTranscript('');
+    setMicTestStatus('');
+    setMicTestLevel(0);
+    fluencyActiveRef.current = false;
+    tappedVigilanceIndexRef.current = -1;
+    setScreen('consent');
+  };
 
-    if (!authReady) {
-      setSaveError('La conexión con Firebase todavía se está preparando. Espere unos segundos.');
-      return;
+  const setParticipant = (key, value) =>
+    setAnswers((current) => ({ ...current, participant: { ...current.participant, [key]: value } }));
+
+  const acceptConsent = () => {
+    if (!answers.consent.read || !answers.consent.participate || !answers.consent.participantName.trim() || !answers.consent.adult) return;
+    setAnswers((current) => ({
+      ...current,
+      consent: { ...current.consent, acceptedAt: new Date().toISOString() },
+      participant: { ...current.participant, name: current.consent.participantName.trim() },
+      administration: { ...current.administration, startedAt: Date.now() },
+    }));
+    setScreen('test');
+    setStep(0);
+  };
+
+  const markPlayed = (key) => setPlayed((current) => ({ ...current, [key]: true }));
+
+  const playTimedSequence = async (items, prefix, onComplete) => {
+    if (played[prefix]) return;
+    markPlayed(prefix);
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      await new Promise((resolve) => {
+        const utterance = new SpeechSynthesisUtterance(item);
+        utterance.lang = 'es-MX';
+        utterance.rate = 0.82;
+        utterance.onend = resolve;
+        utterance.onerror = resolve;
+        window.speechSynthesis.speak(utterance);
+        window.setTimeout(resolve, 900);
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
+    onComplete?.();
+  };
 
-    if (!user) {
-      setSaveError(authError || 'No existe una sesión autenticada para guardar el resultado.');
-      return;
-    }
+  const startVigilance = async () => {
+    if (vigilanceActive || played.vigilance) return;
+    setVigilanceActive(true);
+    setVigilanceCurrent('');
+    setVigilanceIndex(-1);
+    tappedVigilanceIndexRef.current = -1;
+    setAnswers((current) => ({
+      ...current,
+      attention: {
+        ...current.attention,
+        vigilanceHits: 0,
+        vigilanceFalseAlarms: 0,
+        vigilanceOmissions: TARGET_A_COUNT,
+      },
+    }));
 
-    if (!formData.fecha || !formData.lugar?.trim() || !formData.localidad?.trim()) {
-      setOrientationError('Complete la fecha, el lugar actual y la ciudad antes de guardar.');
-      return;
-    }
-    setOrientationError('');
+    window.speechSynthesis?.cancel();
 
-    setGuardando(true);
+    for (let index = 0; index < LETTER_SEQUENCE.length; index += 1) {
+      const letter = LETTER_SEQUENCE[index];
+      const startedAt = performance.now();
+      setVigilanceCurrent(letter);
+      setVigilanceIndex(index);
+      tappedVigilanceIndexRef.current = -1;
 
-    try {
-      const scores = autoScore(formData, cfg);
-      const fluidezAnalizada = analizarFluidez(formData.fluidez, cfg.fluidezLetra);
+      await new Promise((resolve) => {
+        let resolved = false;
+        let watchdogId = null;
+        const finish = () => {
+          if (resolved) return;
+          resolved = true;
+          if (watchdogId) window.clearTimeout(watchdogId);
+          resolve();
+        };
 
-      const resultadoParaGuardar = limpiarParaFirestore({
-        ...formData,
-        userId: user.uid,
-        timestamp: Date.now(),
-        evaluado: false,
-        puntosAuto: scores.total,
-        misAuto: scores.misScore,
-        fluidezAnalisis: {
-          letraSolicitada: cfg.fluidezLetra,
-          palabrasIngresadas: fluidezAnalizada.ingresadas,
-          palabrasCandidatasPorLetra: fluidezAnalizada.validas,
-          palabrasValidas: formData.fluidezValidadas || [],
-          palabrasNoReconocidas: formData.fluidezInvalidas || [],
-          palabrasRepetidas: fluidezAnalizada.repetidas,
-          palabrasConLetraIncorrecta: fluidezAnalizada.letraIncorrecta,
-          cantidadValidas: (formData.fluidezValidadas || []).length
-        }
+        const utterance = new SpeechSynthesisUtterance(letter.toLowerCase());
+        utterance.lang = 'es-MX';
+        utterance.rate = 0.62;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        utterance.onend = finish;
+        utterance.onerror = finish;
+
+        // No se usa un corte fijo de 950 ms: cada letra debe terminar realmente
+        // antes de programar la siguiente. El temporizador solo evita un bloqueo
+        // excepcional del motor de voz y no cancela la secuencia normal.
+        watchdogId = window.setTimeout(finish, 4000);
+        window.speechSynthesis.speak(utterance);
       });
 
-      console.log('Datos que se enviarán a Firestore:', resultadoParaGuardar);
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < 1000) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000 - elapsed));
+      }
+    }
 
-      const referencia = await addDoc(
-        collection(db, 'artifacts', appId, 'data', 'moca_results', 'results'),
-        resultadoParaGuardar
-      );
+    // No cancelar aquí: al llegar a este punto la última letra ya terminó.
+    setVigilanceCurrent('');
+    setVigilanceActive(false);
+    setAnswers((current) => ({
+      ...current,
+      attention: {
+        ...current.attention,
+        vigilanceOmissions: Math.max(0, TARGET_A_COUNT - current.attention.vigilanceHits),
+      },
+    }));
+    markPlayed('vigilance');
+  };
 
-      setSaveSuccess(`Resultado guardado correctamente. Folio: ${referencia.id}`);
+  const tapVigilance = () => {
+    if (!vigilanceActive || !vigilanceCurrent || vigilanceIndex < 0) return;
+    if (tappedVigilanceIndexRef.current === vigilanceIndex) return;
+    tappedVigilanceIndexRef.current = vigilanceIndex;
+    setVigilanceTapFeedback(true);
+    window.setTimeout(() => setVigilanceTapFeedback(false), 220);
+    setAnswers((current) => ({
+      ...current,
+      attention: {
+        ...current.attention,
+        vigilanceHits: current.attention.vigilanceHits + (vigilanceCurrent === 'A' ? 1 : 0),
+        vigilanceFalseAlarms: current.attention.vigilanceFalseAlarms + (vigilanceCurrent === 'A' ? 0 : 1),
+      },
+    }));
+  };
+
+  const startSpeechRecognition = () => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setFluencyRecognitionStatus('El reconocimiento automático de voz no está disponible en este navegador. Use Chrome actualizado o transcriba manualmente a partir de la grabación.');
+      return;
+    }
+    try {
+      const recognition = new Recognition();
+      recognition.lang = 'es-MX';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.onstart = () => setFluencyRecognitionStatus('Reconocimiento de voz activo.');
+      recognition.onresult = (event) => {
+        let finalText = '';
+        let interimText = '';
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const text = event.results[index][0]?.transcript || '';
+          if (event.results[index].isFinal) finalText += `${text} `;
+          else interimText += text;
+        }
+        if (finalText.trim()) {
+          setAnswers((current) => ({
+            ...current,
+            language: {
+              ...current.language,
+              fluencyTranscript: `${current.language.fluencyTranscript || ''} ${finalText}`.trim(),
+            },
+          }));
+        }
+        setFluencyInterimTranscript(interimText);
+      };
+      recognition.onerror = (event) => {
+        setFluencyRecognitionStatus(`Reconocimiento de voz: ${event.error || 'error'}. La revisión manual sigue disponible.`);
+      };
+      recognition.onend = () => {
+        setFluencyInterimTranscript('');
+        if (fluencyActiveRef.current) {
+          try { recognition.start(); } catch (_) { /* el navegador puede estar reiniciando */ }
+        } else {
+          setFluencyRecognitionStatus('Reconocimiento de voz finalizado. Revise la transcripción.');
+        }
+      };
+      speechRecognitionRef.current = recognition;
+      recognition.start();
+    } catch (error) {
+      console.error(error);
+      setFluencyRecognitionStatus('No fue posible iniciar el reconocimiento de voz.');
+    }
+  };
+
+  const startFluency = async () => {
+    setFluencyAudioUrl('');
+    setFluencyMicError('');
+    setFluencyRecognitionStatus('');
+    setFluencyInterimTranscript('');
+    setAnswers((current) => ({ ...current, language: { ...current.language, fluencyTranscript: '' } }));
+    fluencyActiveRef.current = true;
+
+    if (answers.consent.audio && navigator.mediaDevices?.getUserMedia && window.MediaRecorder) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...(selectedMicId ? { deviceId: { exact: selectedMicId } } : {}),
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        micPeakRef.current = 0;
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          const audioContext = new AudioContextClass();
+          const source = audioContext.createMediaStreamSource(stream);
+          const analyser = audioContext.createAnalyser();
+          analyser.fftSize = 2048;
+          source.connect(analyser);
+          const samples = new Uint8Array(analyser.fftSize);
+          const monitorLevel = () => {
+            analyser.getByteTimeDomainData(samples);
+            let peak = 0;
+            for (const sample of samples) peak = Math.max(peak, Math.abs(sample - 128));
+            micPeakRef.current = Math.max(micPeakRef.current, peak);
+            micMonitorFrameRef.current = window.requestAnimationFrame(monitorLevel);
+          };
+          monitorLevel();
+          audioContextRef.current = audioContext;
+        }
+        const recorder = new MediaRecorder(stream);
+        mediaChunksRef.current = [];
+        recorder.ondataavailable = (event) => { if (event.data?.size) mediaChunksRef.current.push(event.data); };
+        recorder.onerror = (event) => setFluencyMicError(`Error de grabación: ${event.error?.message || 'desconocido'}`);
+        recorder.onstop = () => {
+          const blob = new Blob(mediaChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+          if (micMonitorFrameRef.current) window.cancelAnimationFrame(micMonitorFrameRef.current);
+          micMonitorFrameRef.current = null;
+          audioContextRef.current?.close?.();
+          audioContextRef.current = null;
+          if (blob.size > 0) setFluencyAudioUrl(URL.createObjectURL(blob));
+          if (blob.size === 0) {
+            setFluencyMicError('La grabación terminó sin datos. Verifique el micrófono y sus permisos.');
+          } else if (micPeakRef.current < 3) {
+            setFluencyMicError('La grabación se creó, pero no contiene una señal de voz detectable. Revise en Windows y en el navegador cuál micrófono está seleccionado antes de repetir la prueba.');
+          }
+          stream.getTracks().forEach((track) => track.stop());
+          setFluencyRecording(false);
+        };
+        mediaRecorderRef.current = recorder;
+        recorder.start(1000);
+        setFluencyRecording(true);
+        startSpeechRecognition();
+      } catch (error) {
+        console.error(error);
+        setFluencyMicError('No fue posible acceder al micrófono. Revise el permiso del navegador y vuelva a intentar.');
+      }
+    } else if (answers.consent.audio) {
+      setFluencyMicError('Este navegador no permite grabar audio con MediaRecorder.');
+      startSpeechRecognition();
+    }
+    setFluencyActive(true);
+  };
+
+  const finishFluency = () => {
+    fluencyActiveRef.current = false;
+    setFluencyActive(false);
+    setFluencyFinished(true);
+    try { speechRecognitionRef.current?.stop(); } catch (_) { /* sin acción */ }
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+  };
+
+  const scoreObjective = (record) => {
+    const currentCfg = Object.values(VERSION_CONFIG).find((item) => item.version === record.version) || cfg;
+    let attention = 0;
+    const forward = normalize(record.attention.forward).replace(/\s/g, '');
+    const backward = normalize(record.attention.backward).replace(/\s/g, '');
+    if (forward === currentCfg.forwardDigits.join('')) attention += 1;
+    if (backward === currentCfg.backwardExpected) attention += 1;
+    const vigilanceErrors = Number(record.attention.vigilanceFalseAlarms || 0) + Number(record.attention.vigilanceOmissions || 0);
+    if (vigilanceErrors <= 1) attention += 1;
+
+    let serialCorrect = 0;
+    let previous = currentCfg.serialStart;
+    record.attention.serial7.forEach((raw) => {
+      const value = Number(raw);
+      if (Number.isFinite(value) && value === previous - 7) serialCorrect += 1;
+      if (Number.isFinite(value)) previous = value;
+    });
+    attention += serialCorrect >= 4 ? 3 : serialCorrect >= 2 ? 2 : serialCorrect === 1 ? 1 : 0;
+
+    const freeNormalized = record.delayedRecall.free.map(normalize);
+    const freeCorrect = currentCfg.words.filter((word) => freeNormalized.includes(normalize(word))).length;
+    let categoryCorrect = 0;
+    let choiceCorrect = 0;
+    currentCfg.words.forEach((word) => {
+      if (freeNormalized.includes(normalize(word))) return;
+      if (normalize(record.delayedRecall.category[word]) === normalize(word)) categoryCorrect += 1;
+      else if (normalize(record.delayedRecall.multipleChoice[word]) === normalize(word)) choiceCorrect += 1;
+    });
+    const mis = freeCorrect * 3 + categoryCorrect * 2 + choiceCorrect;
+
+    const today = todayParts();
+    const orientation = [
+      Number(record.orientation.day) === today.day,
+      Number(record.orientation.month) === today.month,
+      Number(record.orientation.year) === today.year,
+      normalize(record.orientation.weekday) === normalize(today.weekday),
+      Boolean(record.orientation.place?.trim()),
+      Boolean(record.orientation.city?.trim()),
+    ].filter(Boolean).length;
+
+    return { attention, freeRecall: freeCorrect, mis, orientation };
+  };
+
+  const buildFinalScore = (record) => {
+    const objective = scoreObjective(record);
+    const manualScores = record.manualScores || {};
+    const manualTotal = ['trail', 'copy', 'clock', 'naming', 'repetition', 'fluency', 'abstraction']
+      .reduce((sum, key) => sum + Number(manualScores[key] || 0), 0);
+    const base = manualTotal + objective.attention + objective.freeRecall + objective.orientation;
+    const educationAdjustment = Number(record.participant.educationYears) <= 12 ? 1 : 0;
+    return {
+      objective,
+      base,
+      educationAdjustment,
+      total: Math.min(30, base + educationAdjustment),
+      complete: Boolean(record.evaluatorReviewed),
+    };
+  };
+
+  const validateBeforeSave = () => {
+    const p = answers.participant;
+    const o = answers.orientation;
+    if (!p.name || !p.age || p.educationYears === '') return 'Complete los datos del participante.';
+    if (Number(p.age) < 18) return 'Este estudio solo admite participantes de 18 años o más.';
+    if (![o.day, o.month, o.year, o.weekday, o.place, o.city].every((item) => String(item).trim())) {
+      return 'Registre los seis elementos de orientación. Use “No sabe” cuando corresponda.';
+    }
+    return '';
+  };
+
+  const saveResult = async () => {
+    const validation = validateBeforeSave();
+    if (validation) {
+      setSaveError(validation);
+      return;
+    }
+    if (!user || !authReady) {
+      setSaveError('No hay conexión autenticada con Firebase.');
+      return;
+    }
+    setSaving(true);
+    setSaveError('');
+    try {
+      const completed = {
+        ...answers,
+        administration: { ...answers.administration, completedAt: Date.now() },
+        objectiveScores: scoreObjective(answers),
+        evaluatorReviewed: false,
+        manualScores: null,
+        createdAt: Date.now(),
+        uid: user.uid,
+        status: 'Pendiente de revisión profesional',
+      };
+      const reference = await addDoc(collection(db, ...RESULTS_PATH), cleanFirestore(completed));
+      setSaveMessage(`Registro guardado. Folio: ${reference.id}`);
       setStep(15);
     } catch (error) {
-      console.error('Error al guardar resultado:', error);
-      setSaveError(`No fue posible guardar el resultado: ${error.code || 'sin-codigo'} — ${error.message || 'sin detalle'}`);
+      console.error(error);
+      setSaveError(`${error.code || 'Error'}: ${error.message}`);
     } finally {
-      setGuardando(false);
+      setSaving(false);
     }
   };
 
-  // --- EVALUATOR FLOW ---
-  const handleEvalLogin = () => { 
-    setLoginError('');
-    if (evalPass === dbEvalPass) {
-      setAppState('evaluator_dash'); 
-    } else { 
-      setLoginError("Contraseña incorrecta"); 
-    } 
-  };
-  
-  const handleChangePassword = async () => {
-    setPassMsg(''); setPassErr('');
-    if (oldPass !== dbEvalPass) return setPassErr('La contraseña actual es incorrecta.');
-    if (newPass.length < 4) return setPassErr('La nueva contraseña debe tener al menos 4 caracteres.');
-    try {
-      const confRef = doc(db, 'artifacts', appId, 'data', 'config_eval_settings');
-      await setDoc(confRef, { password: newPass }, { merge: true });
-      setPassMsg('¡Contraseña actualizada con éxito!');
-      setOldPass(''); setNewPass('');
-    } catch (e) {
-      console.error(e);
-      setPassErr('Error de conexión al actualizar.');
-    }
+  const deleteResult = async (id) => {
+    if (!window.confirm('Esta acción eliminará definitivamente el registro. ¿Continuar?')) return;
+    await deleteDoc(doc(db, ...RESULTS_PATH, id));
+    if (selected?.id === id) setSelected(null);
   };
 
-  const saveManual = async (id) => {
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'data', 'moca_results', 'results', id), {
-        puntosManualVisuo1: manualScores.visuo1, puntosManualReloj: manualScores.reloj, evaluado: true
-      });
-      setSelectedRes(null);
-    } catch (e) { console.error(e); }
-  };
-
-  const eliminarResultado = async (resultado) => {
-    const identificador = resultado?.nombre || resultado?.id || 'este registro';
-    if (!window.confirm(`¿Eliminar definitivamente el registro de ${identificador}? Esta acción no se puede deshacer.`)) return;
-    try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'data', 'moca_results', 'results', resultado.id));
-      if (selectedRes?.id === resultado.id) setSelectedRes(null);
-    } catch (error) {
-      console.error('Error al eliminar:', error);
-      window.alert(`No fue posible eliminar el registro: ${error.code || error.message}`);
-    }
-  };
-
-  const getTotalScore = (r, localManual = null) => {
-    let esc = parseInt(r.educacion) <= 12 ? 1 : 0;
-    let manual = r.evaluado ? ((r.puntosManualVisuo1||0) + (r.puntosManualReloj||0)) : (localManual ? localManual.visuo1 + localManual.reloj : 0);
-    return r.puntosAuto + manual + esc;
-  };
-
-  // EVOLUTION ANALYSIS
-  const groupedData = useMemo(() => {
-    const groups = {};
-    resultados.forEach(r => {
-      const key = (r.nombre || '').toLowerCase().trim();
-      if (!key) return;
-      if (!groups[key]) groups[key] = { name: r.nombre, pre: null, post: null };
-      if (r.fase === 'Pretest') { if (!groups[key].pre || r.timestamp > groups[key].pre.timestamp) groups[key].pre = r; }
-      if (r.fase === 'Postest') { if (!groups[key].post || r.timestamp > groups[key].post.timestamp) groups[key].post = r; }
+  const saveManualReview = async () => {
+    if (!selected) return;
+    const payload = { ...selected, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now() };
+    const finalScore = buildFinalScore(payload);
+    await updateDoc(doc(db, ...RESULTS_PATH, selected.id), {
+      manualScores: manual,
+      evaluatorReviewed: true,
+      reviewedAt: Date.now(),
+      finalScore,
+      status: 'Revisado por evaluador',
     });
-    return Object.values(groups).filter(g => g.pre && g.post);
-  }, [resultados]);
+    setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, status: 'Revisado por evaluador' }) : current);
+  };
 
-  // --- RENDERING ---
-  if (appState === 'home') {
+  const progress = Math.round((step / totalSteps) * 100);
+
+  if (screen === 'home') {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <div className="max-w-4xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden">
-          <div className="bg-slate-900 p-12 text-center relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-600/30 to-purple-600/30 z-0"></div>
-            <div className="relative z-10">
-              <h1 className="text-5xl font-black text-white mb-4 tracking-tight">SISTEMA PANEG</h1>
-              <p className="text-slate-300 text-xl font-medium max-w-2xl mx-auto">Plataforma Unificada para el Análisis Neurocognitivo en la Era de la Inteligencia Artificial Generativa</p>
-            </div>
+      <div className="min-h-screen bg-slate-100 p-6">
+        <div className="mx-auto mt-16 max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <header className="bg-gradient-to-r from-blue-900 to-violet-900 px-8 py-14 text-center text-white">
+            <h1 className="text-5xl font-black">PANEG</h1>
+            <p className="mt-3 text-lg">Aplicación supervisada de evaluación neurocognitiva para investigación</p>
+          </header>
+          <div className="grid gap-6 p-8 md:grid-cols-2">
+            <button onClick={() => setScreen('phase')} className="rounded-2xl border-2 border-blue-100 bg-blue-50 p-8 text-left hover:border-blue-500">
+              <span className="text-4xl">📝</span>
+              <h2 className="mt-4 text-2xl font-black text-slate-900">Participante</h2>
+              <p className="mt-2 text-slate-600">Consentimiento, registro y aplicación supervisada.</p>
+            </button>
+            <button onClick={() => { setEvaluatorPassword(''); setEvaluatorUnlocked(false); setScreen('evaluatorLogin'); }} className="rounded-2xl border-2 border-violet-100 bg-violet-50 p-8 text-left hover:border-violet-500">
+              <span className="text-4xl">🔬</span>
+              <h2 className="mt-4 text-2xl font-black text-slate-900">Investigadores</h2>
+              <p className="mt-2 text-slate-600">Revisión profesional, puntuación y gestión de registros.</p>
+            </button>
           </div>
-          <div className="p-8 sm:p-12 grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="flex flex-col items-center p-8 bg-slate-50 rounded-2xl border border-slate-200 shadow-sm">
-              <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-3xl mb-6">📝</div>
-              <h2 className="text-2xl font-bold text-slate-800 mb-2">Participantes</h2>
-              <p className="text-slate-500 text-center text-sm mb-6">Realizar la prueba cognitiva estandarizada.</p>
-              <button onClick={() => setAppState('participant_prep')} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors">Iniciar Sesión de Prueba</button>
-            </div>
-            <div className="flex flex-col items-center p-8 bg-slate-50 rounded-2xl border border-slate-200 shadow-sm">
-              <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center text-3xl mb-6">🔬</div>
-              <h2 className="text-2xl font-bold text-slate-800 mb-2">Investigadores</h2>
-              <p className="text-slate-500 text-center text-sm mb-6">Acceder al panel de control y análisis de evolución.</p>
-              <button onClick={() => setAppState('evaluator_login')} className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors">Acceso Evaluador</button>
-            </div>
-          </div>
+          <p className="px-8 pb-8 text-xs text-slate-500">
+            Prototipo de investigación. La validez clínica y la autorización de uso requieren cumplimiento de las condiciones del titular del instrumento y validación formal.
+          </p>
         </div>
       </div>
     );
   }
 
-  if (appState === 'evaluator_login') {
+  if (screen === 'phase') {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-slate-200 text-center">
-          <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center text-3xl mx-auto mb-6">🔒</div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-6">Autenticación Requerida</h2>
-          {loginError && <div className="mb-4 p-3 bg-red-50 text-red-600 font-bold rounded-lg border border-red-200">{loginError}</div>}
-          <input type="password" value={evalPass} onChange={e=>setEvalPass(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-300 rounded-xl mb-6 text-center tracking-widest outline-none focus:border-purple-500" placeholder="Contraseña de investigador" />
-          <button onClick={handleEvalLogin} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 rounded-xl transition-colors mb-4">Ingresar al Dashboard</button>
-          <button onClick={() => {setAppState('home'); setLoginError(''); setEvalPass('');}} className="text-slate-500 text-sm hover:text-slate-700 font-medium">← Volver al Inicio</button>
+      <div className="min-h-screen bg-slate-100 p-6">
+        <div className="mx-auto mt-20 max-w-xl rounded-3xl bg-white p-10 shadow-xl">
+          <h2 className="text-center text-3xl font-black text-slate-900">Seleccione la fase</h2>
+          <div className="mt-8 grid grid-cols-2 gap-4">
+            {Object.keys(VERSION_CONFIG).map((key) => (
+              <button
+                key={key}
+                onClick={() => setPhase(key)}
+                className={`rounded-2xl border-2 p-6 font-black ${phase === key ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200'}`}
+              >
+                {key}<span className="mt-2 block text-sm font-medium">MoCA {VERSION_CONFIG[key].version}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={startPhase} className={`mt-8 w-full rounded-xl py-4 font-black text-white ${theme}`}>Continuar</button>
+          <button onClick={() => setScreen('home')} className="mt-4 w-full text-sm font-bold text-slate-500">Volver</button>
         </div>
       </div>
     );
   }
 
-  if (appState === 'evaluator_dash') {
+  if (screen === 'consent') {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col">
-        <div className="bg-slate-900 text-white p-6 shadow-md flex justify-between items-center z-10 relative">
-          <div><h1 className="text-2xl font-black tracking-tight">PANEG <span className="font-light text-slate-400">| Dashboard Analítico</span></h1></div>
-          <div className="flex gap-4">
-            <button onClick={() => setDashTab('list')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-colors ${dashTab === 'list' ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Registros</button>
-            <button onClick={() => setDashTab('evolution')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-colors ${dashTab === 'evolution' ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Análisis de Evolución</button>
-            <button onClick={() => setDashTab('settings')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-colors ${dashTab === 'settings' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Configuración</button>
-            <button onClick={() => {setAppState('home'); setEvalPass('');}} className="px-4 py-2 bg-slate-800 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors ml-4">Cerrar Sesión</button>
+      <div className="min-h-screen bg-slate-100 p-4 md:p-8">
+        <div className="mx-auto max-w-3xl rounded-3xl bg-white p-6 shadow-xl md:p-10">
+          <h1 className="text-3xl font-black text-slate-900">{consentText.title}</h1>
+          <div className="mt-6 max-h-[55vh] space-y-5 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-5">
+            {consentText.body.map(([title, text]) => (
+              <section key={title}>
+                <h2 className="font-black text-slate-800">{title}</h2>
+                <p className="mt-1 leading-relaxed text-slate-600">{text}</p>
+              </section>
+            ))}
           </div>
+          <div className="mt-6 space-y-4">
+            <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.read} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, read: e.target.checked } }))}/><span>Declaro que leí y comprendí la información anterior.</span></label>
+            <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.participate} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, participate: e.target.checked } }))}/><span>Acepto participar voluntariamente en esta investigación.</span></label>
+            <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.adult} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, adult: e.target.checked } }))}/><span>Declaro que tengo 18 años o más.</span></label>
+            <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.audio} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, audio: e.target.checked } }))}/><span>Autorizo, de manera independiente, la grabación de fragmentos de voz cuando el protocolo la habilite.</span></label>
+            <input className="w-full rounded-xl border-2 border-slate-200 p-4" placeholder="Nombre del participante" value={answers.consent.participantName} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, participantName: e.target.value } }))}/>
+          </div>
+          <button disabled={!answers.consent.read || !answers.consent.participate || !answers.consent.adult || !answers.consent.participantName.trim()} onClick={acceptConsent} className={`mt-6 w-full rounded-xl py-4 font-black text-white disabled:opacity-40 ${theme}`}>Acepto y deseo continuar</button>
+          <button onClick={() => setScreen('home')} className="mt-3 w-full rounded-xl py-3 font-bold text-slate-600">No acepto / salir</button>
         </div>
+      </div>
+    );
+  }
 
-        <div className="flex-grow p-6 sm:p-10 max-w-7xl mx-auto w-full">
-          
-          {dashTab === 'list' && !selectedRes && (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr className="text-xs uppercase tracking-wider text-slate-500 font-bold">
-                    <th className="p-5">Participante</th><th className="p-5">Versión / Fase</th><th className="p-5 text-center">Score MIS</th><th className="p-5">Estado</th><th className="p-5 text-right">Acción</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {resultados.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-5"><div className="font-bold text-slate-800">{r.nombre}</div><div className="text-xs text-slate-500">{r.edad} años | Edu: {r.educacion} | {r.grupo}</div></td>
-                      <td className="p-5">
-                        <span className={`inline-block px-2 py-1 rounded text-xs font-bold mr-2 ${r.fase==='Pretest'?'bg-blue-100 text-blue-800':'bg-teal-100 text-teal-800'}`}>{r.fase}</span>
-                        <span className="text-xs font-mono text-slate-500">v{r.version}</span>
-                      </td>
-                      <td className="p-5 text-center font-black text-slate-700">{r.misAuto}/15</td>
-                      <td className="p-5">{r.evaluado ? <span className="text-green-600 bg-green-50 px-2 py-1 rounded-md text-xs font-bold">✅ Evaluado</span> : <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded-md text-xs font-bold">⏳ Pendiente</span>}</td>
-                      <td className="p-5 text-right"><div className="flex justify-end gap-2"><button onClick={() => {setSelectedRes(r); setManualScores({visuo1: r.puntosManualVisuo1||0, reloj: r.puntosManualReloj||0});}} className="text-purple-600 hover:text-purple-800 font-bold text-sm bg-purple-50 px-3 py-1.5 rounded-lg">Calificar</button><button onClick={() => eliminarResultado(r)} className="text-red-600 hover:text-red-800 font-bold text-sm bg-red-50 px-3 py-1.5 rounded-lg">Eliminar</button></div></td>
-                    </tr>
-                  ))}
-                  {resultados.length === 0 && <tr><td colSpan="5" className="p-10 text-center text-slate-400">Sin datos registrados</td></tr>}
-                </tbody>
+  if (screen === 'evaluatorLogin') {
+    return (
+      <div className="min-h-screen bg-slate-100 p-6">
+        <div className="mx-auto mt-24 max-w-md rounded-3xl bg-white p-10 shadow-xl">
+          <h2 className="text-3xl font-black">Acceso de investigadores</h2>
+          <input type="password" className="mt-8 w-full rounded-xl border-2 p-4" placeholder="Contraseña" value={evaluatorPassword} onChange={(e) => setEvaluatorPassword(e.target.value)} />
+          <button onClick={() => { if (evaluatorPassword === 'paneg2025') { setEvaluatorUnlocked(true); setEvaluatorPassword(''); setScreen('evaluator'); } else alert('Contraseña incorrecta'); }} className="mt-4 w-full rounded-xl bg-violet-600 py-4 font-black text-white">Ingresar</button>
+          <button onClick={() => setScreen('home')} className="mt-4 w-full text-sm font-bold text-slate-500">Volver</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (screen === 'evaluator') {
+    return (
+      <div className="min-h-screen bg-slate-100 p-4 md:p-8">
+        <div className="mx-auto max-w-6xl">
+          <div className="mb-6 flex items-center justify-between">
+            <h1 className="text-3xl font-black">Panel de investigadores</h1>
+            <button onClick={() => { setEvaluatorUnlocked(false); setEvaluatorPassword(''); setSelected(null); setManual({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 }); setScreen('home'); }} className="rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Salir</button>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]">
+            <div className="overflow-hidden rounded-2xl bg-white shadow">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-100"><tr><th className="p-4">Participante</th><th>Fase</th><th>Estado</th><th>Total</th><th className="p-4">Acciones</th></tr></thead>
+                <tbody>{results.map((row) => <tr key={row.id} className="border-t"><td className="p-4 font-bold">{row.participant?.name}<span className="block text-xs font-normal text-slate-400">{row.id}</span></td><td>{row.phase} · {row.version}</td><td>{row.status}</td><td className="font-black">{row.finalScore?.complete ? `${row.finalScore.total}/30` : "Pendiente"}</td><td className="p-4"><button onClick={() => { const rowCfg = Object.values(VERSION_CONFIG).find((item) => item.version === row.version) || cfg; setSelected(row); setManual(row.manualScores || { trail: 0, copy: 0, clock: 0, naming: suggestedNamingScore(row,rowCfg), repetition: suggestedRepetitionScore(row,rowCfg), fluency: 0, abstraction: suggestedAbstractionScore(row,rowCfg) }); }} className="mr-2 rounded bg-blue-600 px-3 py-2 font-bold text-white">Revisar</button><button onClick={() => deleteResult(row.id)} className="rounded bg-red-600 px-3 py-2 font-bold text-white">Eliminar</button></td></tr>)}</tbody>
               </table>
+              {results.length === 0 && <p className="p-10 text-center text-slate-500">No hay registros.</p>}
             </div>
-          )}
+            <div className="max-h-[82vh] overflow-y-auto rounded-2xl bg-white p-6 shadow">
+              {!selected ? <p className="text-slate-500">Seleccione un registro para revisar.</p> : <>
+                <h2 className="text-xl font-black">Revisión profesional organizada por dominio</h2>
+                <p className="mt-1 text-sm text-slate-500">{selected.participant?.name} · {selected.phase} · versión {selected.version}</p>
+                {(() => {
+                  const selectedCfg = Object.values(VERSION_CONFIG).find((item) => item.version === selected.version) || cfg;
+                  const objective = scoreObjective(selected);
+                  const provisional = buildFinalScore({ ...selected, manualScores: manual, evaluatorReviewed: true });
+                  return <div className="mt-5 space-y-6">
+                    <section className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">1. Visuoespacial / ejecutiva · Alternancia</h3><ScoreInput label="Alternancia" max={1} value={manual.trail} onChange={(value)=>setManual((c)=>({...c,trail:value}))}/></div>
+                      <TrailEvidence stimulus={selectedCfg.trailImage} drawing={selected.trail?.drawing}/><ScoringGuide><p><strong>Asigne 1 punto</strong> únicamente si la secuencia es 1–A–2–B–3–C–4–D–5–E, sin líneas cruzadas.</p><p>Asigne 0 puntos si hay un error no autocorregido inmediatamente o si se conecta E con 1.</p></ScoringGuide>
+                    </section>
 
-          {dashTab === 'list' && selectedRes && (
-            <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8 max-w-4xl mx-auto">
-              <button onClick={() => setSelectedRes(null)} className="text-slate-500 font-bold mb-6 flex items-center gap-2 hover:text-slate-800">← Volver</button>
-              <div className="flex gap-8 border-b border-slate-100 pb-8 mb-8">
-                <div className="flex-1">
-                  <h2 className="text-3xl font-black text-slate-800 mb-2">{selectedRes.nombre}</h2>
-                  <p className="text-slate-500 font-medium mb-4">{selectedRes.edad} años • {selectedRes.educacion} años estudio • {selectedRes.grupo}</p>
-                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${selectedRes.fase==='Pretest'?'bg-blue-100 text-blue-800':'bg-teal-100 text-teal-800'}`}>{selectedRes.fase} (MoCA v{selectedRes.version})</span>
-                </div>
-                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 text-center min-w-[150px]">
-                  <p className="text-xs uppercase tracking-widest font-bold text-slate-500 mb-2">MoCA Total</p>
-                  <div className="text-5xl font-black text-slate-800">{getTotalScore(selectedRes, manualScores)}<span className="text-2xl text-slate-400">/30</span></div>
-                  {parseInt(selectedRes.educacion) <= 12 && <p className="text-[10px] text-green-600 font-bold mt-2">+1 pt escolaridad</p>}
-                </div>
-              </div>
+                    <section className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">2. Visuoconstrucción · {selected.version === '8.1' ? 'Cubo' : 'Cama'}</h3><ScoreInput label={selected.version === '8.1' ? 'Cubo' : 'Cama'} max={1} value={manual.copy} onChange={(value)=>setManual((c)=>({...c,copy:value}))}/></div>
+                      <DrawingEvidence stimulus={selectedCfg.copyImage} drawing={selected.copyDrawing} stimulusLabel={`Modelo de ${selected.version === '8.1' ? 'cubo' : 'cama'}`}/><ScoringGuide><p><strong>Asigne 1 punto</strong> solo si se cumplen todos los criterios: dibujo tridimensional, todas las líneas presentes, líneas conectadas con poco o ningún espacio, sin líneas añadidas, líneas relativamente paralelas y de longitud semejante, y orientación espacial conservada.</p><p>Si falla cualquiera de estos criterios, asigne 0 puntos.</p></ScoringGuide>
+                    </section>
 
-              <h3 className="text-xl font-bold mb-6">Revisión Manual Visuoconstructiva</h3>
-              <div className="grid grid-cols-2 gap-8 mb-8">
-                <div className="border border-slate-200 p-4 rounded-xl">
-                  <div className="flex justify-between mb-4"><p className="font-bold">Dibujo 1 ({selectedRes.version==='8.1'?'Cubo':'Cama'})</p><span className="text-xs bg-slate-100 px-2 py-1 rounded font-bold text-slate-500">Máx 1</span></div>
-                  <div className="h-40 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center mb-4 p-2">
-                    {selectedRes.visuo1Img ? <img src={selectedRes.visuo1Img} className="max-h-full max-w-full" alt="Visuo 1"/> : <span className="text-slate-400 italic text-sm">No dibujó</span>}
-                  </div>
-                  <select value={manualScores.visuo1} onChange={e=>setManualScores({...manualScores, visuo1: parseInt(e.target.value)})} className="w-full p-2 border border-slate-300 rounded-lg font-bold text-slate-700 bg-white">
-                    <option value={0}>0 - Incorrecto</option><option value={1}>1 - Correcto</option>
-                  </select>
-                </div>
-                <div className="border border-slate-200 p-4 rounded-xl">
-                  <div className="flex justify-between mb-4"><p className="font-bold">Reloj ({selectedRes.version==='8.1'?'11:10':'10:05'})</p><span className="text-xs bg-slate-100 px-2 py-1 rounded font-bold text-slate-500">Máx 3</span></div>
-                  <div className="h-40 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center mb-4 p-2">
-                    {selectedRes.relojImg ? <img src={selectedRes.relojImg} className="max-h-full max-w-full" alt="Reloj"/> : <span className="text-slate-400 italic text-sm">No dibujó</span>}
-                  </div>
-                  <select value={manualScores.reloj} onChange={e=>setManualScores({...manualScores, reloj: parseInt(e.target.value)})} className="w-full p-2 border border-slate-300 rounded-lg font-bold text-slate-700 bg-white">
-                    <option value={0}>0 - Nada</option><option value={1}>1 pt (1 criterio)</option><option value={2}>2 pts (2 criterios)</option><option value={3}>3 pts (Correcto total)</option>
-                  </select>
-                </div>
-              </div>
-              <button onClick={() => saveManual(selectedRes.id)} className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors">Guardar Calificación</button>
+                    <section className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">3. Visuoconstrucción · Reloj ({selectedCfg.clockText})</h3><ScoreInput label="Reloj" max={3} value={manual.clock} onChange={(value)=>setManual((c)=>({...c,clock:value}))}/></div>
+                      <DrawingEvidence drawing={selected.clockDrawing} stimulusLabel={`Instrucción: marcar ${selectedCfg.clockText}`} responseLabel="Reloj del participante"/>
+                      <p className="mt-3 text-sm text-slate-600">Califique por separado contorno, números y manecillas; el valor capturado corresponde a la suma de esos tres criterios.</p><ScoringGuide><p><strong>Contorno (1):</strong> círculo o cuadrado cerrado; solo se aceptan deformaciones leves.</p><p><strong>Números (1):</strong> todos presentes, sin extras, en orden correcto y ubicados aproximadamente en sus cuadrantes; todos dentro o todos fuera del contorno.</p><p><strong>Manecillas (1):</strong> dos manecillas unidas, hora correcta, la horaria claramente más corta y ambas centradas.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">4. Denominación</h3><ScoreInput label="Denominación" max={3} value={manual.naming} onChange={(value)=>setManual((c)=>({...c,naming:value}))}/></div>
+                      <div className="grid gap-3 sm:grid-cols-3">{selectedCfg.animalImages.map((src,index)=>{const accepted=(selectedCfg.animalAnswers[index]||[]).map((item)=>toUpper(item));const correct=accepted.map(normalize).includes(normalize(selected.naming?.[index]));return <div key={src} className="rounded-xl border bg-white p-3"><img src={src} alt={`Animal ${index+1}`} className="h-36 w-full object-contain"/><p className="mt-2 text-sm"><strong>Respuesta:</strong> {selected.naming?.[index] || '—'}</p><p className={`mt-1 text-xs font-bold ${correct?'text-green-700':'text-red-700'}`}>{correct?'Coincide con respuesta aceptada':'No coincide automáticamente'}</p><p className="mt-1 text-xs text-slate-500">Aceptadas: {accepted.join(', ')}</p></div>})}</div><p className="mt-3 rounded-lg bg-emerald-100 p-2 text-sm font-bold text-emerald-900">Sugerencia automática: {suggestedNamingScore(selected,selectedCfg)}/3.</p><ScoringGuide><p>Asigne 1 punto por cada animal denominado con una respuesta aceptada para la versión aplicada.</p><p>8.1: LEÓN; RINOCERONTE; CAMELLO o DROMEDARIO. 8.3: CABALLO/PONI/YEGUA/POTRO; TIGRE; PATO.</p><p>La sugerencia automática debe confirmarse si hubo error de escritura o transcripción.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
+                      <h3 className="text-lg font-black">5. Memoria inmediata · sin puntuación</h3>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2"><div className="rounded-xl bg-white p-3"><strong>Intento 1:</strong><p>{(selected.memoryTrial1||[]).join(' / ') || '—'}</p><p className="mt-2 font-bold text-amber-700">{countExactWords(selected.memoryTrial1||[],selectedCfg.words)}/5 correctas</p></div><div className="rounded-xl bg-white p-3"><strong>Intento 2:</strong><p>{(selected.memoryTrial2||[]).join(' / ') || '—'}</p><p className="mt-2 font-bold text-amber-700">{countExactWords(selected.memoryTrial2||[],selectedCfg.words)}/5 correctas</p></div></div><ScoringGuide><p>Los dos ensayos de memoria inmediata <strong>no aportan puntos</strong>. Registre las palabras recordadas en cada intento y verifique que se hayan realizado ambos ensayos, incluso si el primero fue completo.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
+                      <h3 className="text-lg font-black">6. Atención · cálculo automático</h3>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2"><div className="rounded-xl bg-white p-3"><p><strong>Dígitos directos:</strong> {selected.attention?.forward || '—'}</p><p><strong>Dígitos inversos:</strong> {selected.attention?.backward || '—'}</p><p className="mt-2"><strong>Vigilancia:</strong> {selected.attention?.vigilanceHits ?? 0} aciertos, {selected.attention?.vigilanceFalseAlarms ?? 0} falsas alarmas, {selected.attention?.vigilanceOmissions ?? 0} omisiones.</p></div><div className="rounded-xl bg-white p-3"><p><strong>Restas:</strong> {(selected.attention?.serial7||[]).join(' / ') || '—'}</p><p className="mt-3 text-2xl font-black">Puntaje automático: {objective.attention}/6</p></div></div><ScoringGuide><p><strong>Dígitos (0–2):</strong> 1 punto por la serie directa correcta y 1 por la inversa correcta.</p><p><strong>Vigilancia (0–1):</strong> 1 punto con 0 o 1 error total. Error total = omisiones + falsas alarmas.</p><p><strong>Restas (0–3):</strong> 0 correctas = 0; 1 correcta = 1; 2–3 correctas = 2; 4–5 correctas = 3. Evalúe cada resta respecto de la respuesta inmediatamente anterior.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">7. Lenguaje · Repetición</h3><ScoreInput label="Repetición" max={2} value={manual.repetition} onChange={(value)=>setManual((c)=>({...c,repetition:value}))}/></div>
+                      <div className="space-y-2 rounded-xl bg-white p-3"><p><strong>Frase 1:</strong> {selected.language?.sentence1 || '—'}</p><p><strong>Frase 2:</strong> {selected.language?.sentence2 || '—'}</p><p className="mt-2 font-bold text-fuchsia-800">Sugerencia automática: {suggestedRepetitionScore(selected,selectedCfg)}/2.</p><p className="text-xs text-slate-500">Solo coincide automáticamente cuando la transcripción es exacta; confirme oralmente los errores gramaticales, omisiones o adiciones.</p></div><ScoringGuide><p>Asigne 1 punto por cada frase repetida exactamente.</p><p>Considere incorrectas las omisiones, adiciones, sustituciones, cambios gramaticales y alteraciones de singular o plural.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">8. Lenguaje · Fluidez con {selectedCfg.fluencyLetter}</h3><ScoreInput label="Fluidez" max={1} value={manual.fluency} onChange={(value)=>setManual((c)=>({...c,fluency:value}))}/></div>
+                      <div className="rounded-xl bg-white p-3"><p className="whitespace-pre-wrap"><strong>Transcripción:</strong> {selected.language?.fluencyTranscript || '—'}</p>{(() => { const analysis = analyzeFluencyTranscript(selected.language?.fluencyTranscript || '', selectedCfg.fluencyLetter); return <div className="mt-3 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-950"><p><strong>Candidatas únicas:</strong> {analysis.validCandidates.length} · <strong>Punto sugerido:</strong> {analysis.suggestedPoint}/1</p><p className="mt-1"><strong>Válidas por forma:</strong> {analysis.validCandidates.length ? analysis.validCandidates.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : '—'}</p></div>; })()}<p className="mt-2 text-sm text-slate-500">La transcripción automática es evidencia auxiliar; confirme significado, nombres propios, conjugaciones, variantes de raíz y errores del reconocimiento.</p></div><ScoringGuide><p>Asigne 1 punto si produjo <strong>11 o más palabras válidas en 60 segundos</strong>.</p><p>No cuente nombres propios, números, formas conjugadas de un verbo, repeticiones ni palabras que comiencen con otra letra. Revise manualmente la transcripción automática.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-cyan-200 bg-cyan-50/40 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">9. Abstracción</h3><ScoreInput label="Abstracción" max={2} value={manual.abstraction} onChange={(value)=>setManual((c)=>({...c,abstraction:value}))}/></div>
+                      <div className="rounded-xl bg-white p-3"><p><strong>{selectedCfg.abstractionPairs[0].join('–')}:</strong> {selected.abstraction?.pair1 || '—'}</p><p className="mt-2 text-xs text-slate-500">Aceptadas: {selectedCfg.abstractionAccepted[0].map(toUpper).join(', ')}</p><p className="mt-3"><strong>{selectedCfg.abstractionPairs[1].join('–')}:</strong> {selected.abstraction?.pair2 || '—'}</p><p className="mt-2 text-xs text-slate-500">Aceptadas: {selectedCfg.abstractionAccepted[1].map(toUpper).join(', ')}</p><p className="mt-2 text-sm">Pista utilizada: {selected.abstraction?.promptUsed ? 'Sí' : 'No'}</p><p className="mt-3 font-bold text-cyan-800">Sugerencia automática: {suggestedAbstractionScore(selected,selectedCfg)}/2.</p></div><ScoringGuide><p>Asigne 1 punto por cada pareja cuya respuesta exprese la categoría abstracta aceptada.</p><p>No acepte semejanzas concretas. En 8.1: tren–bicicleta = transporte/locomoción/para viajar; regla–reloj = medición/para medir. En 8.3: martillo–desarmador = herramientas/carpintería/construcción/instrumentos de trabajo; cerillos–lámpara = luz/iluminación.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
+                      <h3 className="text-lg font-black">10. Recuerdo diferido y MIS · cálculo automático</h3>
+                      <div className="mt-3 rounded-xl bg-white p-3"><p><strong>Recuerdo libre:</strong> {(selected.delayedRecall?.free||[]).join(' / ') || '—'}</p><p className="mt-3 text-xl font-black">Recuerdo libre: {objective.freeRecall}/5 · MIS: {objective.mis}/15</p></div><ScoringGuide><p><strong>Recuerdo libre:</strong> 1 punto por cada palabra recordada espontáneamente, sin pistas.</p><p><strong>MIS:</strong> espontánea ×3; con pista de categoría ×2; con elección múltiple ×1. El MIS es una subpuntuación y no se suma de nuevo al total de 30.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl border border-slate-300 bg-slate-50 p-4">
+                      <h3 className="text-lg font-black">11. Orientación · cálculo automático</h3>
+                      <p className="mt-3">{selected.orientation ? `${selected.orientation.day}/${selected.orientation.month}/${selected.orientation.year}; ${selected.orientation.weekday}; ${selected.orientation.place}; ${selected.orientation.city}` : '—'}</p><p className="mt-3 text-xl font-black">Puntaje automático: {objective.orientation}/6</p><ScoringGuide><p>Asigne 1 punto por cada dato correcto: día del mes, mes, año, día de la semana, lugar y ciudad/localidad.</p><p>La fecha y el lugar deben ser exactos; no otorgue el punto por una diferencia de un día.</p></ScoringGuide>
+                    </section>
+
+                    <section className="rounded-2xl bg-slate-900 p-5 text-white">
+                      <h3 className="text-xl font-black">Resumen de puntuación</h3>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-3"><div><span className="text-slate-300">Base</span><p className="text-3xl font-black">{provisional.base}</p></div><div><span className="text-slate-300">Ajuste escolaridad</span><p className="text-3xl font-black">+{provisional.educationAdjustment}</p></div><div><span className="text-slate-300">Total provisional</span><p className="text-3xl font-black">{provisional.total}/30</p></div></div>
+                      <p className="mt-3 text-sm text-slate-300">El total queda definitivo al guardar la revisión profesional. No es necesario esperar a que la persona complete ambos tests; cada registro se calcula y revisa por separado.</p><div className="mt-4 rounded-xl bg-slate-800 p-3 text-sm text-slate-200"><p><strong>Ajuste por escolaridad:</strong> agregue 1 punto cuando corresponda según el criterio configurado, sin superar 30 puntos.</p><p className="mt-1"><strong>Interpretación:</strong> el resultado debe ser revisado por un profesional capacitado y no constituye por sí solo un diagnóstico.</p></div>
+                    </section>
+                  </div>;
+                })()}
+                <button onClick={saveManualReview} className="mt-6 w-full rounded-xl bg-violet-600 py-3 font-black text-white">Guardar revisión y calcular total definitivo</button>
+              </>}
             </div>
-          )}
-
-          {dashTab === 'evolution' && (
-            <div className="space-y-8">
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-                <h2 className="text-2xl font-black text-slate-800 mb-2">Análisis de Evolución Neurocognitiva</h2>
-                <p className="text-slate-500 mb-8">Comparativa automatizada de participantes que han completado el Pretest (MoCA 8.1) y el Postest (MoCA 8.3).</p>
-                
-                {groupedData.length === 0 ? (
-                  <div className="p-12 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300">
-                    <span className="text-4xl mb-4 block">📊</span>
-                    <p className="text-slate-500 font-medium">Aún no hay participantes con ambos registros (Pretest y Postest) completados para generar el análisis.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 relative">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest text-center mb-6">Trayectorias Individuales (Puntuación Total)</h3>
-                      <svg viewBox="0 0 500 350" className="w-full h-auto overflow-visible font-sans">
-                        {[0, 10, 20, 26, 30].map(y => (
-                          <g key={y}>
-                            <line x1="40" y1={300 - (y*10)} x2="460" y2={300 - (y*10)} stroke={y===26 ? '#ef4444' : '#cbd5e1'} strokeWidth={y===26 ? 2 : 1} strokeDasharray={y===26 ? '4 4' : '0'} />
-                            <text x="30" y={300 - (y*10) + 4} fontSize="12" fill={y===26 ? '#ef4444' : '#94a3b8'} textAnchor="end" fontWeight="bold">{y}</text>
-                          </g>
-                        ))}
-                        <text x="460" y={300 - (26*10) - 6} fontSize="10" fill="#ef4444" textAnchor="end" fontWeight="bold">Umbral Normalidad (26)</text>
-                        <text x="150" y="330" fontSize="14" fill="#1e293b" textAnchor="middle" fontWeight="black">PRETEST (v8.1)</text>
-                        <text x="350" y="330" fontSize="14" fill="#1e293b" textAnchor="middle" fontWeight="black">POSTEST (v8.3)</text>
-
-                        {groupedData.map((g, i) => {
-                          const score1 = getTotalScore(g.pre);
-                          const score2 = getTotalScore(g.post);
-                          const y1 = 300 - (score1 * 10);
-                          const y2 = 300 - (score2 * 10);
-                          const isBetter = score2 > score1;
-                          const isWorse = score2 < score1;
-                          const strokeColor = isBetter ? '#10b981' : (isWorse ? '#ef4444' : '#64748b');
-                          
-                          return (
-                            <g key={i}>
-                              <line x1="150" y1={y1} x2="350" y2={y2} stroke={strokeColor} strokeWidth="3" opacity="0.7" />
-                              <circle cx="150" cy={y1} r="6" fill={strokeColor} />
-                              <circle cx="350" cy={y2} r="6" fill={strokeColor} />
-                              <text x="135" y={y1+4} fontSize="11" fill="#475569" textAnchor="end" fontWeight="bold">{g.name.split(' ')[0]} ({score1})</text>
-                              <text x="365" y={y2+4} fontSize="11" fill="#475569" textAnchor="start" fontWeight="bold">({score2})</text>
-                            </g>
-                          );
-                        })}
-                      </svg>
-                    </div>
-
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-bold text-slate-800 border-b border-slate-200 pb-2 mb-4">Análisis Descriptivo</h3>
-                      {groupedData.map((g, i) => {
-                        const preTotal = getTotalScore(g.pre);
-                        const postTotal = getTotalScore(g.post);
-                        const delta = postTotal - preTotal;
-                        const deltaMis = g.post.misAuto - g.pre.misAuto;
-                        let icon, title, color;
-                        if (delta > 0) { icon = '📈'; title = 'Mejora Cognitiva'; color = 'text-green-600 bg-green-50 border-green-200'; }
-                        else if (delta < 0) { icon = '📉'; title = 'Deterioro Detectado'; color = 'text-red-600 bg-red-50 border-red-200'; }
-                        else { icon = '➖'; title = 'Mantenimiento'; color = 'text-slate-600 bg-slate-50 border-slate-200'; }
-
-                        const missingEval = (!g.pre.evaluado || !g.post.evaluado) ? " (⚠️ Faltan calificaciones manuales en una o ambas pruebas)" : "";
-
-                        return (
-                          <div key={i} className={`p-4 rounded-xl border ${color}`}>
-                            <div className="flex items-center gap-3 mb-2">
-                              <span className="text-2xl">{icon}</span>
-                              <div>
-                                <p className="font-black leading-tight">{g.name} <span className="text-sm font-medium opacity-70 ml-2">({g.pre.grupo})</span></p>
-                                <p className="text-xs font-bold uppercase tracking-widest">{title}</p>
-                              </div>
-                            </div>
-                            <p className="text-sm opacity-90 leading-relaxed">
-                              El participante partió de un puntaje base de <strong>{preTotal}/30</strong> y obtuvo <strong>{postTotal}/30</strong> en la prueba de seguimiento. 
-                              Esto representa una diferencia de <strong>{delta > 0 ? `+${delta}` : delta} puntos</strong> en el MoCA global.
-                              <br/>En la Escala de Memoria (MIS), pasó de {g.pre.misAuto}/15 a {g.post.misAuto}/15 ({deltaMis > 0 ? `+${deltaMis}` : deltaMis}).
-                              <span className="text-orange-600 font-bold block mt-1">{missingEval}</span>
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {dashTab === 'settings' && (
-            <div className="max-w-lg mx-auto bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-              <h2 className="text-2xl font-black text-slate-800 mb-2">Configuración</h2>
-              <p className="text-slate-500 mb-8">Gestión de acceso para el panel de investigador.</p>
-              
-              <div className="space-y-4">
-                {passMsg && <div className="p-4 bg-green-50 border border-green-200 text-green-700 font-bold rounded-xl">{passMsg}</div>}
-                {passErr && <div className="p-4 bg-red-50 border border-red-200 text-red-700 font-bold rounded-xl">{passErr}</div>}
-                
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Contraseña Actual</label>
-                  <input type="password" value={oldPass} onChange={e=>setOldPass(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500" placeholder="••••••••" />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Nueva Contraseña</label>
-                  <input type="password" value={newPass} onChange={e=>setNewPass(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500" placeholder="••••••••" />
-                </div>
-                
-                <button onClick={handleChangePassword} className="w-full py-4 mt-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl transition-colors">Actualizar Contraseña</button>
-              </div>
-            </div>
-          )}
-
-        </div>
-      </div>
-    );
-  }
-
-  // --- PARTICIPANT SELECTION PREP ---
-  if (appState === 'participant_prep') {
-    return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 sm:p-12 rounded-3xl shadow-xl max-w-xl w-full border border-slate-200 text-center">
-          <h2 className="text-3xl font-black text-slate-800 mb-4">Selección de Fase</h2>
-          <p className="text-slate-500 mb-8">Por favor, indique qué evaluación va a realizar.</p>
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <button onClick={() => setFaseSelect('Pretest')} className={`p-6 rounded-2xl border-2 transition-all ${faseSelect==='Pretest' ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-md transform scale-105' : 'border-slate-200 text-slate-500 hover:border-blue-300'}`}>
-              <div className="text-3xl mb-2">📝</div><div className="font-black text-lg">PRETEST</div><div className="text-xs mt-1">MoCA v8.1</div>
-            </button>
-            <button onClick={() => setFaseSelect('Postest')} className={`p-6 rounded-2xl border-2 transition-all ${faseSelect==='Postest' ? 'border-teal-600 bg-teal-50 text-teal-700 shadow-md transform scale-105' : 'border-slate-200 text-slate-500 hover:border-teal-300'}`}>
-              <div className="text-3xl mb-2">🔄</div><div className="font-black text-lg">POSTEST</div><div className="text-xs mt-1">MoCA v8.3</div>
-            </button>
-          </div>
-          <button onClick={initParticipant} className={`w-full py-4 text-white font-black rounded-xl transition-all shadow-lg ${faseSelect==='Pretest'?'bg-blue-600 hover:bg-blue-700':'bg-teal-600 hover:bg-teal-700'}`}>Continuar a Registro</button>
-          <button onClick={() => setAppState('home')} className="mt-6 text-slate-500 font-bold hover:text-slate-800 text-sm">← Cancelar y Volver</button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- PARTICIPANT TEST FLOW ---
-  if (appState === 'participant_test') {
-    const progress = Math.round((Math.floor(step) / 14) * 100);
-    const themeColor = cfg.color === 'blue' ? 'bg-blue-600' : 'bg-teal-500';
-    const textColor = cfg.color === 'blue' ? 'text-blue-700' : 'text-teal-700';
-
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-        <div className="bg-white shadow-sm border-b border-slate-200 px-6 py-4 fixed top-0 w-full z-20 flex justify-between items-center">
-          <h1 className={`text-xl font-black ${textColor}`}>PANEG <span className="font-medium text-slate-400">| {faseSelect} (v{cfg.version})</span></h1>
-          <div className="w-1/3 flex items-center gap-3">
-            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden"><div className={`${themeColor} h-full transition-all duration-500`} style={{width: `${progress}%`}}></div></div>
-            <span className="text-xs font-bold text-slate-400">{progress}%</span>
-          </div>
-        </div>
-
-        <div className="flex-grow pt-24 pb-12 px-4 flex justify-center items-start">
-          <div className="bg-white max-w-3xl w-full rounded-3xl shadow-xl border border-slate-100 p-8 sm:p-12">
-            
-            {step === 0 && (
-              <div className="animate-fade-in">
-                <h2 className="text-3xl font-black mb-8 text-center text-slate-800">Registro de Participante</h2>
-                <div className="space-y-6 max-w-md mx-auto">
-                  <input type="text" className="w-full p-4 bg-slate-50 border-2 border-slate-200 rounded-xl focus:border-slate-400 outline-none font-bold text-slate-700" value={formData.nombre} onChange={e=>setFormData({...formData, nombre: e.target.value})} placeholder="Nombre Completo" />
-                  <div className="flex gap-4">
-                    <input type="number" className="w-1/2 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl outline-none font-bold text-slate-700" value={formData.edad} onChange={e=>setFormData({...formData, edad: e.target.value})} placeholder="Edad" />
-                    <input type="number" className="w-1/2 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl outline-none font-bold text-slate-700" value={formData.educacion} onChange={e=>setFormData({...formData, educacion: e.target.value})} placeholder="Años Estudio" />
-                  </div>
-                  <select className="w-full p-4 bg-slate-50 border-2 border-slate-200 rounded-xl outline-none font-bold text-slate-700" value={formData.grupo} onChange={e=>setFormData({...formData, grupo: e.target.value})}>
-                    <option>Experimental (Uso de IAGen)</option><option>Control</option>
-                  </select>
-                </div>
-                <button disabled={!formData.nombre || !formData.edad || !formData.educacion} onClick={()=>setStep(1)} className={`mt-10 w-full max-w-md mx-auto block text-white font-black py-4 rounded-xl disabled:opacity-50 ${themeColor}`}>Comenzar Evaluación</button>
-              </div>
-            )}
-
-            {step === 1 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Alternancia</h2><p className="mb-8 text-slate-500 font-medium">Alterne entre números y letras en orden (1 → A → 2...).</p>
-                <div className="relative w-full max-w-md mx-auto h-80 bg-slate-50 border-2 border-slate-200 rounded-2xl mb-8">
-                  {[{v:'1',t:'5%',l:'10%'}, {v:'A',t:'75%',l:'15%'}, {v:'2',t:'20%',l:'35%'}, {v:'B',t:'60%',l:'45%'}, {v:'3',t:'15%',l:'60%'}, {v:'C',t:'80%',l:'70%'}, {v:'4',t:'30%',l:'80%'}, {v:'D',t:'55%',l:'90%'}, {v:'5',t:'10%',l:'90%'}, {v:'E',t:'85%',l:'40%'}].map(item => (
-                    <button key={item.v} onClick={()=>handleAlternancia(item.v)} disabled={formData.alternancia.includes(item.v)} style={{top:item.t, left:item.l}} className={`absolute w-12 h-12 rounded-full font-black text-xl border-2 transition-all ${formData.alternancia.includes(item.v) ? `${themeColor} text-white scale-90` : 'bg-white text-slate-700 hover:bg-slate-100'}`}>{item.v}</button>
-                  ))}
-                </div>
-                <button onClick={()=>setStep(2)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">{cfg.visuoTitle}</h2><p className="mb-8 text-slate-500">{cfg.visuoInst}</p>
-                <div className="flex flex-col sm:flex-row justify-center gap-8 mb-8">
-                  <div className="w-48 h-48 border-2 border-slate-200 bg-slate-50 flex items-center justify-center p-4 text-slate-800"><svg viewBox="0 0 100 100" className="w-full h-full">{cfg.visuoSvg}</svg></div>
-                  <DrawingCanvas onSave={(img) => setFormData({...formData, visuo1Img: img})} />
-                </div>
-                <button onClick={()=>setStep(3)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Reloj</h2><p className="mb-8 text-slate-500">Dibuje un reloj analógico marcando <strong className="text-slate-800">{cfg.relojInst}</strong>.</p>
-                <div className="mb-8 flex justify-center"><DrawingCanvas onSave={(img) => setFormData({...formData, relojImg: img})} /></div>
-                <button onClick={()=>setStep(4)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 4 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Identificación</h2>
-                <div className="grid grid-cols-3 gap-6 mb-10">
-                  {[1,2,3].map(n => (
-                    <div key={n} className="flex flex-col items-center">
-                      <AnimalImage name={cfg.animales[n-1].name} emoji={cfg.animales[n-1].emoji} />
-                      <input type="text" className={`mt-4 w-full text-center border-b-2 p-2 text-lg uppercase font-bold outline-none bg-transparent ${cfg.color==='blue'?'focus:border-blue-600':'focus:border-teal-600'}`} value={formData[`animal${n}`]} onChange={e=>setFormData({...formData, [`animal${n}`]: e.target.value})} />
-                    </div>
-                  ))}
-                </div>
-                <button onClick={()=>setStep(5)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 5 && (
-              <div className="text-center py-8">
-                <h2 className="text-2xl font-black mb-8">Memoria</h2>
-                <div className="h-40 flex items-center justify-center mb-8">
-                  {interactive.memoriaPaso===0 && <button onClick={()=>startTimer('memoria')} className={`px-8 py-4 text-white font-black rounded-xl text-xl animate-pulse ${themeColor}`}>Iniciar Lectura</button>}
-                  {interactive.memoriaPaso===1 && <h1 className="text-6xl font-black text-slate-800 uppercase">{interactive.letraActual}</h1>}
-                  {interactive.memoriaPaso===2 && <p className="text-green-600 font-black text-2xl">¡Recuerde estas palabras!</p>}
-                </div>
-                {interactive.memoriaPaso===2 && <button onClick={()=>setStep(6)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Continuar</button>}
-              </div>
-            )}
-
-            {step === 6 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-8">Secuencias</h2>
-                <div className="space-y-6 text-left max-w-md mx-auto mb-8">
-                  <div className="bg-slate-50 p-6 border border-slate-200 rounded-xl">
-                    <p className="font-bold text-slate-700 mb-2">Escriba igual: <span className="tracking-widest bg-yellow-100 px-2 rounded">{cfg.digitsAdelante}</span></p>
-                    <input type="text" inputMode="numeric" className="w-full p-3 border-2 rounded-lg text-2xl text-center tracking-[0.5em] outline-none" value={formData.numerosAdelante} onChange={e=>setFormData({...formData, numerosAdelante: e.target.value})} />
-                  </div>
-                  <div className="bg-slate-50 p-6 border border-slate-200 rounded-xl">
-                    <p className="font-bold text-slate-700 mb-2">Escriba AL REVÉS: <span className="tracking-widest bg-yellow-100 px-2 rounded">{cfg.digitsAtras}</span></p>
-                    <input type="text" inputMode="numeric" className="w-full p-3 border-2 rounded-lg text-2xl text-center tracking-[0.5em] outline-none" value={formData.numerosAtras} onChange={e=>setFormData({...formData, numerosAtras: e.target.value})} />
-                  </div>
-                </div>
-                <button onClick={()=>setStep(7)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 7 && (
-              <div className="text-center py-4">
-                <h2 className="text-2xl font-black mb-4">Vigilancia</h2><p className="mb-8 text-slate-500">Toque el botón <strong>SÓLO</strong> cuando vea la letra <strong>A</strong>.</p>
-                <div className="h-64 flex flex-col items-center justify-center mb-8">
-                  {!interactive.letrasActivas && !interactive.letrasTerminadas && <button onClick={()=>startTimer('letras')} className={`px-8 py-4 text-white font-black rounded-xl text-xl animate-pulse ${themeColor}`}>Comenzar</button>}
-                  {interactive.letrasActivas && (
-                    <><div className="h-32 flex items-center justify-center mb-4"><h1 className="text-8xl font-black">{interactive.letraActual}</h1></div>
-                    <button onMouseDown={tapLetra} onTouchStart={tapLetra} className="w-32 h-32 bg-red-500 text-white font-black text-3xl rounded-full shadow-xl active:scale-90 border-4 border-white select-none">¡A!</button></>
-                  )}
-                  {interactive.letrasTerminadas && <p className="text-green-600 font-black text-2xl">Completado</p>}
-                </div>
-                {interactive.letrasTerminadas && <button onClick={()=>setStep(8)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>}
-              </div>
-            )}
-
-            {step === 8 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-6">Restas</h2><p className="mb-8 text-slate-500">Reste 7 a <strong>{cfg.restaBase}</strong> sucesivamente.</p>
-                <div className="flex flex-wrap justify-center items-center gap-2 mb-10 bg-slate-50 p-6 rounded-xl border border-slate-100">
-                  <span className="font-black text-slate-400 text-2xl">{cfg.restaBase}</span> <span className="text-slate-300 font-bold">→</span>
-                  {formData.restas.map((v, i) => (
-                    <React.Fragment key={i}>{i>0 && <span className="text-slate-300 font-bold">→</span>}
-                      <input type="number" className="w-16 h-16 p-2 border-2 border-slate-300 rounded-xl text-center text-xl font-bold outline-none" value={v} onChange={e=>{const r=[...formData.restas]; r[i]=e.target.value; setFormData({...formData, restas: r});}} />
-                    </React.Fragment>
-                  ))}
-                </div>
-                <button onClick={()=>setStep(9)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 9 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-6">Repetición</h2>
-                <div className="space-y-6 text-left max-w-lg mx-auto mb-8">
-                  {[1,2].map(n => {
-                    const indice = n - 1;
-                    const escuchada = interactive.frasesEscuchadas[indice];
-                    const reproduciendo = interactive.fraseReproduciendo === indice;
-                    return (
-                      <div key={n} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                        <p className="font-bold text-slate-700 mb-3">Frase {n}</p>
-                        <button
-                          type="button"
-                          onClick={() => escucharFrase(indice)}
-                          disabled={escuchada || interactive.fraseReproduciendo !== null}
-                          className={`w-full mb-4 px-4 py-3 rounded-xl font-black text-white disabled:opacity-50 ${themeColor}`}
-                        >
-                          {reproduciendo ? '🔊 Reproduciendo...' : escuchada ? '✓ Frase escuchada' : '🔊 Escuchar esta frase'}
-                        </button>
-                        <input type="text" disabled={!escuchada} className="w-full p-3 border-2 border-white rounded-lg outline-none font-medium disabled:bg-slate-100 disabled:text-slate-400" value={formData[`frase${n}`]} onChange={e=>setFormData({...formData, [`frase${n}`]: e.target.value})} placeholder={escuchada ? 'Escriba exactamente lo que escuchó...' : 'Primero escuche la frase'} />
-                      </div>
-                    );
-                  })}
-                </div>
-                <button onClick={()=>setStep(10)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 10 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Fluidez Verbal</h2><p className="mb-6 text-slate-500">1 minuto. Palabras con la letra <strong className="text-xl">{cfg.fluidezLetra}</strong>.</p>
-                {!interactive.fluidezActiva && !interactive.fluidezTerminada && <button onClick={()=>startTimer('fluidez')} className={`px-8 py-3 text-white font-black rounded-xl animate-pulse mb-8 ${themeColor}`}>Iniciar Tiempo</button>}
-                {(interactive.fluidezActiva || interactive.fluidezTerminada) && (
-                  <div className="max-w-lg mx-auto mb-8 bg-slate-50 p-6 rounded-xl border border-slate-200">
-                    <div className={`text-4xl font-black mb-4 ${interactive.tiempoFluidez<=10&&interactive.tiempoFluidez>0?'text-red-500':'text-slate-800'}`}>00:{interactive.tiempoFluidez<10?`0${interactive.tiempoFluidez}`:interactive.tiempoFluidez}</div>
-                    <textarea rows="4" className="w-full p-4 border-2 rounded-xl font-medium outline-none resize-none" value={formData.fluidez} onChange={e=>setFormData({...formData, fluidez: e.target.value})} disabled={interactive.fluidezTerminada||!interactive.fluidezActiva} placeholder="Escriba aquí, separando por comas..."></textarea>
-                    {(() => {
-                      const analisis = analizarFluidez(formData.fluidez, cfg.fluidezLetra);
-                      return (
-                        <div className="mt-4 text-left text-sm space-y-1">
-                          <p className="font-bold text-slate-700">Candidatas por letra y sin repetir: {analisis.cantidadValidas}</p>
-                          {analisis.repetidas.length > 0 && <p className="text-orange-700">Repetidas: {analisis.repetidas.join(', ')}</p>}
-                          {analisis.letraIncorrecta.length > 0 && <p className="text-red-700">No empiezan con {cfg.fluidezLetra}: {analisis.letraIncorrecta.join(', ')}</p>}
-                          {interactive.fluidezValidando && <p className="text-blue-700 font-bold">Consultando diccionario español...</p>}
-                          {!interactive.fluidezValidando && interactive.fluidezDiccionario.validas.length > 0 && <p className="text-green-700 font-bold">Reconocidas por el diccionario: {interactive.fluidezDiccionario.validas.length} ({interactive.fluidezDiccionario.validas.join(', ')})</p>}
-                          {!interactive.fluidezValidando && interactive.fluidezDiccionario.invalidas.length > 0 && <p className="text-red-700 font-bold">No reconocidas o mal escritas: {interactive.fluidezDiccionario.invalidas.join(', ')}</p>}
-                          {interactive.fluidezDiccionario.error && <div className="mt-2"><p className="text-red-700 font-bold">{interactive.fluidezDiccionario.error}</p><button type="button" onClick={validarFluidezDiccionario} className="mt-2 px-3 py-2 rounded-lg bg-blue-600 text-white font-bold">Reintentar validación</button></div>}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-                {interactive.fluidezTerminada && <button disabled={interactive.fluidezValidando || !!interactive.fluidezDiccionario.error} onClick={()=>setStep(11)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed">{interactive.fluidezValidando ? 'Validando palabras...' : 'Siguiente'}</button>}
-              </div>
-            )}
-
-            {step === 11 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-6">Abstracción</h2>
-                <div className="space-y-4 text-left max-w-md mx-auto mb-8">
-                  {[1,2].map(n => (
-                    <div key={n} className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between">
-                      <span className="font-bold text-slate-700 w-1/2">{cfg.absPares[n-1].a} - {cfg.absPares[n-1].b}</span>
-                      <input type="text" className="w-1/2 p-2 border-2 border-white rounded-lg outline-none font-medium" placeholder="Son..." value={formData[`similitud${n}`]} onChange={e=>setFormData({...formData, [`similitud${n}`]: e.target.value})} />
-                    </div>
-                  ))}
-                </div>
-                <button onClick={()=>setStep(12)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {/* RECUERDO Y MIS */}
-            {step === 12 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Recuerdo Diferido</h2><p className="mb-6 text-slate-500">Escriba las 5 palabras memorizadas.</p>
-                <div className="flex flex-col gap-3 max-w-xs mx-auto mb-8">
-                  {[0,1,2,3,4].map(idx => (
-                    <input key={idx} type="text" className="w-full p-3 bg-slate-50 border-2 rounded-xl text-center text-lg uppercase font-bold outline-none" value={formData.recuerdoEspontaneo[idx]} onChange={e=>{const r=[...formData.recuerdoEspontaneo]; r[idx]=e.target.value; setFormData({...formData, recuerdoEspontaneo: r});}} />
-                  ))}
-                </div>
-                <button onClick={()=>evaluarMIS('espontaneo')} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Evaluar</button>
-              </div>
-            )}
-
-            {step === 12.1 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Pistas de Categoría</h2><p className="mb-6 text-slate-500">Faltaron algunas. Aquí hay pistas.</p>
-                <div className="flex flex-col gap-4 max-w-md mx-auto mb-8 text-left">
-                  {interactive.faltantesCat.map(p => (
-                    <div key={p} className="bg-orange-50 p-4 border border-orange-100 rounded-xl"><p className="text-sm font-bold text-orange-800 mb-2">Es un/una: {cfg.pistasCategoria[p]}</p><input type="text" className="w-full p-2 bg-white border-2 rounded-lg uppercase font-bold outline-none" value={formData.recuerdoCategoria[p]||''} onChange={e=>setFormData({...formData, recuerdoCategoria: {...formData.recuerdoCategoria, [p]: e.target.value}})}/></div>
-                  ))}
-                </div>
-                <button onClick={()=>evaluarMIS('categoria')} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 12.2 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-4">Opciones</h2><p className="mb-6 text-slate-500">Seleccione la correcta.</p>
-                <div className="flex flex-col gap-4 max-w-sm mx-auto mb-8 text-left">
-                  {interactive.faltantesOpc.map(p => (
-                    <div key={p} className="bg-purple-50 p-4 border border-purple-100 rounded-xl flex flex-col gap-2">
-                      {cfg.pistasOpciones[p].map(opt => (
-                        <label key={opt} className="flex items-center gap-3 p-2 bg-white rounded-lg border-2 cursor-pointer"><input type="radio" name={`opt_${p}`} value={opt} checked={formData.recuerdoOpcion[p]===opt} onChange={e=>setFormData({...formData, recuerdoOpcion: {...formData.recuerdoOpcion, [p]: e.target.value}})}/><span className="uppercase font-bold">{opt}</span></label>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-                <button onClick={()=>setStep(13)} className="w-full max-w-xs mx-auto block bg-slate-800 text-white font-bold py-3 rounded-xl">Siguiente</button>
-              </div>
-            )}
-
-            {step === 13 && (
-              <div className="text-center">
-                <h2 className="text-2xl font-black mb-6">Orientación</h2>
-                <div className="space-y-4 max-w-md mx-auto text-left mb-10">
-                  <input type="date" className="w-full p-4 bg-slate-50 border-2 rounded-xl font-bold text-slate-700 outline-none" value={formData.fecha} onChange={e=>setFormData({...formData, fecha: e.target.value})} />
-                  <input type="text" className="w-full p-4 bg-slate-50 border-2 rounded-xl font-bold text-slate-700 outline-none" placeholder="Lugar actual (Ej. Clínica)" value={formData.lugar} onChange={e=>setFormData({...formData, lugar: e.target.value})} />
-                  <input type="text" className="w-full p-4 bg-slate-50 border-2 rounded-xl font-bold text-slate-700 outline-none" placeholder="Ciudad" value={formData.localidad} onChange={e=>setFormData({...formData, localidad: e.target.value})} />
-                </div>
-                {orientationError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 text-sm font-medium">{orientationError}</div>}
-                {authError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{authError}</div>}
-                {saveError && <div className="max-w-md mx-auto mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">{saveError}</div>}
-                <button
-                  onClick={submitTest}
-                  disabled={guardando || !authReady || !user}
-                  className={`w-full max-w-md mx-auto block text-white font-black py-4 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${themeColor}`}
-                >
-                  {guardando ? 'Guardando...' : !authReady ? 'Conectando con Firebase...' : 'Guardar Resultados'}
-                </button>
-              </div>
-            )}
-
-            {step === 15 && (
-              <div className="text-center py-16">
-                <div className={`w-24 h-24 text-white rounded-full flex items-center justify-center text-5xl mx-auto mb-6 ${themeColor}`}>✓</div>
-                <h2 className="text-3xl font-black text-slate-800 mb-4">Evaluación {faseSelect} Completada</h2>
-                <p className="text-slate-500 mb-4 font-medium">Sus respuestas han sido registradas para el proyecto PANEG.</p>
-                {saveSuccess && (
-                  <div className="max-w-md mx-auto mb-8 p-4 rounded-xl border border-green-200 bg-green-50 text-green-700 text-sm font-medium break-words">
-                    {saveSuccess}
-                  </div>
-                )}
-                <button onClick={()=>{setAppState('home'); setStep(0); setSaveSuccess(''); setSaveError('');}} className="px-8 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors">Volver al Inicio</button>
-              </div>
-            )}
           </div>
         </div>
       </div>
     );
   }
 
-  return null;
+  if (screen !== 'test') return null;
+
+  const next = () => setStep((current) => Math.min(15, current + 1));
+  return (
+    <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-24"><PageHeader phase={phase} version={cfg.version} progress={progress} theme={cfg.theme}/><PageCard>
+      {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input className="rounded-xl border-2 p-4" placeholder="Nombre completo" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/><label className="text-sm font-bold text-slate-700">Edad<input type="number" inputMode="numeric" min="18" max="120" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="number" inputMode="numeric" min="0" max="40" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><input type="date" className="rounded-xl border-2 p-4" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40}/></div>}
+
+      {step === 1 && <div><h2 className="text-3xl font-black">Alternancia conceptual</h2><p className="mt-2 text-slate-500">Dibuje una línea continua alternando número y letra en orden ascendente, sin unir el final con el inicio.</p><div className="mt-6"><TrailDrawingCanvas image={cfg.trailImage} value={answers.trail.drawing} onChange={(drawing) => setAnswers((c) => ({ ...c, trail: { ...c.trail, drawing } }))}/></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.trail.drawing}/></div>}
+
+      {step === 2 && <div><h2 className="text-3xl font-black">Copiar {cfg.copyTitle.toLowerCase()}</h2><div className="mt-6 grid gap-6 md:grid-cols-2"><StimulusImage src={cfg.copyImage} alt={`Estímulo ${cfg.copyTitle}`}/><DrawingCanvas label="Dibujo del participante" value={answers.copyDrawing} onChange={(copyDrawing) => setAnswers((c) => ({ ...c, copyDrawing }))}/></div><NextStepButton themeClass={theme} onClick={next}/></div>}
+
+      {step === 3 && <div><h2 className="text-3xl font-black">Reloj</h2><div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 font-bold text-orange-800">El examinador debe asegurarse de que no haya relojes visibles.</div><p className="mt-5 text-lg">Dibuje un reloj con todos los números y marque las <strong>{cfg.clockText}</strong>.</p><div className="mt-6"><DrawingCanvas label="Dibujo del reloj" value={answers.clockDrawing} onChange={(clockDrawing) => setAnswers((c) => ({ ...c, clockDrawing }))}/></div><NextStepButton themeClass={theme} onClick={next}/></div>}
+
+      {step === 4 && <div><h2 className="text-3xl font-black">Denominación</h2><p className="mt-2 text-slate-500">Diga el nombre de cada animal. El examinador registra literalmente la respuesta oral.</p><div className="mt-6 grid gap-5 md:grid-cols-3">{cfg.animalImages.map((src,index)=><div key={src}><StimulusImage src={src} alt={`Animal ${index+1}`}/><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.naming[index]} onChange={(e)=>setAnswers((c)=>{const naming=[...c.naming]; naming[index]=toUpper(e.target.value); return {...c,naming};})}/></div>)}</div><div className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Validación automática orientativa: {suggestedNamingScore(answers, cfg)} de 3 respuestas coinciden con las respuestas aceptadas por la guía. La revisión profesional puede corregir variantes orales o errores de transcripción.</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+
+      {step === 5 && <div><h2 className="text-3xl font-black">Memoria · primer intento</h2><p className="mt-2 text-slate-500">Las cinco palabras se presentan auditivamente, una por segundo. No deben mostrarse por escrito al participante.</p><button type="button" disabled={played.memory1} onClick={()=>playTimedSequence(cfg.words,'memory1',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory1?'Lista reproducida':'Escuchar lista'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial1.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial1=[...c.memoryTrial1]; memoryTrial1[index]=toUpper(e.target.value); return {...c,memoryTrial1};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 1: {countExactWords(answers.memoryTrial1, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory1}/></div>}
+
+      {step === 6 && <div><h2 className="text-3xl font-black">Memoria · segundo intento</h2><p className="mt-2 text-slate-500">Repita la misma lista completa, incluso si el primer intento fue exitoso.</p><button type="button" disabled={played.memory2} onClick={()=>playTimedSequence(cfg.words,'memory2',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory2?'Lista reproducida':'Escuchar lista otra vez'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial2.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial2=[...c.memoryTrial2]; memoryTrial2[index]=toUpper(e.target.value); return {...c,memoryTrial2};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 2: {countExactWords(answers.memoryTrial2, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><p className="mt-5 font-bold text-slate-700">Al terminar, informe: “Le volveré a preguntar estas palabras al final de la prueba”.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory2}/></div>}
+
+      {step === 7 && <div><h2 className="text-3xl font-black">Atención · dígitos</h2><div className="mt-6 space-y-6"><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia delante</p><AudioButton src={`/audio/${cfg.folder}/digits-forward.mp3`} text={cfg.forwardDigits.join(', ')} onceKey="digitsForward" played={played.digitsForward} onPlayed={markPlayed}/><input className="mt-4 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta oral" value={answers.attention.forward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,forward:e.target.value}}))}/></section><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia atrás</p><AudioButton src={`/audio/${cfg.folder}/digits-backward.mp3`} text={cfg.backwardDigits.join(', ')} onceKey="digitsBackward" played={played.digitsBackward} onPlayed={markPlayed}/><input className="mt-4 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta oral en orden inverso" value={answers.attention.backward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,backward:e.target.value}}))}/></section></div><NextStepButton themeClass={theme} onClick={next} disabled={!played.digitsForward || !played.digitsBackward}/></div>}
+
+      {step === 8 && <div><h2 className="text-3xl font-black">Atención · vigilancia</h2><p className="mt-2 text-slate-500">Escuche una letra por segundo y pulse únicamente cuando oiga A. Las letras no se muestran. La secuencia contiene 29 letras y 11 letras A.</p><div className="mt-8 flex flex-col items-center"><button onClick={startVigilance} disabled={played.vigilance} className="rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{vigilanceActive?'Secuencia en curso…':played.vigilance?'Secuencia finalizada':'Iniciar secuencia'}</button><button onPointerDown={tapVigilance} disabled={!vigilanceActive} className={`mt-10 h-40 w-40 rounded-full text-3xl font-black text-white shadow-xl transition duration-150 disabled:opacity-40 ${vigilanceTapFeedback ? 'scale-90 bg-green-600 ring-8 ring-green-200' : 'scale-100 bg-red-600'}`}>A</button><p className={`mt-3 h-6 text-sm font-bold ${vigilanceTapFeedback ? 'text-green-700' : 'text-transparent'}`}>Pulsación registrada</p><p className="mt-6 text-sm text-slate-400">Elemento {vigilanceIndex >= 0 ? vigilanceIndex + 1 : 0} de {LETTER_SEQUENCE.length}</p></div><NextStepButton themeClass={theme} onClick={next} disabled={vigilanceActive || !played.vigilance}/></div>}
+
+      {step === 9 && <div><h2 className="text-3xl font-black">Sustracción seriada</h2><p className="mt-2 text-slate-500">Reste mentalmente 7 a partir de {cfg.serialStart}. No use dedos, lápiz, papel o calculadora. Registre cada respuesta sin corregir las anteriores.</p><div className="mt-8 grid gap-4 md:grid-cols-5">{answers.attention.serial7.map((value,index)=><input key={index} type="number" className="rounded-xl border-2 p-4 text-center text-xl font-black" value={value} onChange={(e)=>setAnswers((c)=>{const serial7=[...c.attention.serial7]; serial7[index]=e.target.value; return {...c,attention:{...c.attention,serial7}};})}/>)}</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+
+      {step === 10 && <div><h2 className="text-3xl font-black">Repetición de frases</h2><p className="mt-2 text-slate-500">Cada frase se escucha una sola vez. El participante debe repetirla oralmente cuando termine el audio. El examinador transcribe después de escuchar la respuesta; no es necesario escribir mientras se reproduce la frase.</p>{cfg.sentences.map((sentence,index)=><section key={sentence} className="mt-6 rounded-xl bg-slate-50 p-5"><AudioButton src={`/audio/${cfg.folder}/sentence-${index+1}.mp3`} text={sentence} onceKey={`sentence${index+1}`} played={played[`sentence${index+1}`]} onPlayed={markPlayed} label={`Escuchar frase ${index+1}`} speechRate={0.85}/><textarea className="mt-4 w-full rounded-xl border-2 p-3" rows="3" placeholder="Transcripción literal de la respuesta oral, después de que el participante termine de repetir" value={answers.language[`sentence${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,[`sentence${index+1}`]:toUpper(e.target.value)}}))}/></section>)}<div className="mt-4 rounded-xl bg-fuchsia-50 p-3 text-sm font-bold text-fuchsia-800">Puntaje automático sugerido: {suggestedRepetitionScore(answers, cfg)}/2. La guía exige repetición exacta; la revisión profesional debe confirmar omisiones, adiciones, sustituciones y cambios gramaticales.</div><NextStepButton themeClass={theme} onClick={next} disabled={!played.sentence1 || !played.sentence2}/></div>}
+
+      {step === 11 && <div><h2 className="text-3xl font-black">Fluidez verbal</h2><p className="mt-2 text-slate-500">Sí: el participante debe hablar durante 60 segundos y decir el mayor número posible de palabras que comiencen con <strong>{cfg.fluencyLetter}</strong>. No debe escribir durante el minuto.</p><div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">{answers.consent.audio ? 'La autorización de audio está activa: PANEG intentará grabar únicamente este minuto.' : 'No se autorizó grabación. El examinador deberá escuchar y registrar las palabras manualmente.'}</div>{answers.consent.audio&&<div className="mt-4 rounded-xl border bg-white p-4"><label className="block text-sm font-black">Micrófono de entrada<select className="mt-2 w-full rounded-lg border-2 p-3 font-normal" value={selectedMicId} onChange={(e)=>setSelectedMicId(e.target.value)}><option value="">Predeterminado del sistema</option>{microphones.map((device,index)=><option key={device.deviceId||index} value={device.deviceId}>{device.label||`Micrófono ${index+1}`}</option>)}</select></label><button type="button" onClick={testMicrophone} className="mt-3 rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Probar micrófono durante 4 segundos</button><div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-green-600 transition-all" style={{width:`${micTestLevel}%`}}/></div>{micTestStatus&&<p className="mt-2 text-sm font-bold text-slate-700">{micTestStatus}</p>}</div>}<div className="mt-8 flex flex-col items-center">{!fluencyFinished&&<><Countdown active={fluencyActive} seconds={60} onFinish={finishFluency}/><button type="button" onClick={startFluency} disabled={fluencyActive} className="mt-5 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{fluencyActive?(fluencyRecording?'Grabando y transcribiendo…':'Tiempo en curso…'):'Iniciar 60 segundos'}</button>{fluencyActive&&<div className="mt-4 w-full rounded-xl bg-slate-50 p-4 text-sm"><p className="font-bold">{fluencyRecognitionStatus || 'Esperando reconocimiento de voz…'}</p>{fluencyInterimTranscript&&<p className="mt-2 text-slate-500">{fluencyInterimTranscript}</p>}</div>}</>}{fluencyFinished&&<div className="w-full"><p className="font-bold text-green-700">Tiempo finalizado. PANEG generó una transcripción automática cuando el navegador lo permitió; el investigador debe verificarla contra el audio.</p>{fluencyMicError&&<div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{fluencyMicError}</div>}{fluencyRecognitionStatus&&<div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">{fluencyRecognitionStatus}</div>}{fluencyAudioUrl&&<div className="mt-4 rounded-xl border bg-slate-50 p-4"><audio controls src={fluencyAudioUrl} className="w-full"/><a href={fluencyAudioUrl} download={`PANEG-${phase}-fluidez.webm`} className="mt-3 inline-block font-bold text-blue-700 underline">Descargar grabación local</a><p className="mt-2 text-xs text-slate-500">Este audio existe solo en esta sesión y no se conserva en Firebase. Descárguelo antes de salir si desea conservarlo.</p></div>}<label className="mt-4 block text-sm font-bold text-slate-700">Transcripción automática editable<textarea className="mt-2 w-full rounded-xl border-2 p-4 font-normal" rows="6" placeholder="La transcripción aparecerá aquí. También puede corregirse manualmente." value={answers.language.fluencyTranscript} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,fluencyTranscript:e.target.value}}))}/></label>{(() => { const analysis = analyzeFluencyTranscript(answers.language.fluencyTranscript, cfg.fluencyLetter); return <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950"><p className="font-black">Análisis automático auxiliar</p><p className="mt-2">Candidatas únicas con {cfg.fluencyLetter}: <strong>{analysis.validCandidates.length}</strong> · Punto sugerido: <strong>{analysis.suggestedPoint}/1</strong></p><p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-1"><strong>Demasiado cortas o aisladas:</strong> {analysis.tooShort.length ? analysis.tooShort.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-2 text-xs">Este filtro elimina duplicados, números, elementos de una sola letra y palabras con otra inicial. No determina por sí solo significado, nombre propio ni conjugación verbal; esa validación permanece a cargo del investigador.</p></div>; })()}</div>}</div><NextStepButton themeClass={theme} onClick={next} disabled={!fluencyFinished}/></div>}
+
+      {step === 12 && <div><h2 className="text-3xl font-black">Abstracción</h2><p className="mt-2 text-slate-500">La respuesta no tiene que ser una sola palabra. Debe expresar la categoría o relación común entre los dos elementos.</p><div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-5"><p className="font-bold">Ejemplo: naranja y plátano</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta" value={answers.abstraction.example} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,example:toUpper(e.target.value)}}))}/><label className="mt-3 flex gap-2"><input type="checkbox" checked={answers.abstraction.promptUsed} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,promptUsed:e.target.checked}}))}/><span>Se utilizó la única pista permitida en esta sección.</span></label></div>{cfg.abstractionPairs.map((pair,index)=><div key={pair.join('-')} className="mt-5 rounded-xl bg-slate-50 p-5"><p className="font-black">{pair[0]} – {pair[1]}</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.abstraction[`pair${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,[`pair${index+1}`]:toUpper(e.target.value)}}))}/></div>)}<div className="mt-4 rounded-xl bg-cyan-50 p-3 text-sm font-bold text-cyan-800">Puntaje automático sugerido: {suggestedAbstractionScore(answers, cfg)}/2. La revisión profesional debe confirmar respuestas equivalentes no incluidas literalmente.</div><NextStepButton themeClass={theme} onClick={()=>{setAnswers((c)=>({...c,administration:{...c.administration,delayedRecallStartedAt:Date.now()}}));next();}}/></div>}
+
+      {step === 13 && <div><h2 className="text-3xl font-black">Recuerdo diferido</h2><p className="mt-2 text-slate-500">Primero registre únicamente las palabras recordadas espontáneamente, sin pistas.</p><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.delayedRecall.free.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" value={value} onChange={(e)=>setAnswers((c)=>{const free=[...c.delayedRecall.free];free[index]=toUpper(e.target.value);return {...c,delayedRecall:{...c.delayedRecall,free}};})}/>)}</div><div className="mt-8 space-y-4">{cfg.words.map((word)=>{const freeFound=answers.delayedRecall.free.map(normalize).includes(normalize(word)); if(freeFound)return null; return <div key={word} className="rounded-xl border border-orange-200 bg-orange-50 p-4"><p className="font-bold">Pista de categoría: {cfg.categoryCues[word]}</p><input className="mt-2 w-full rounded-lg border-2 p-2" placeholder="Respuesta con pista" value={answers.delayedRecall.category[word]||''} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,category:{...c.delayedRecall.category,[word]:toUpper(e.target.value)}}}))}/>{normalize(answers.delayedRecall.category[word])!==normalize(word)&&<div className="mt-3"><p className="text-sm font-bold">Elección múltiple</p><div className="mt-2 flex flex-wrap gap-2">{cfg.multipleChoice[word].map((option)=><label key={option} className="rounded-lg border bg-white px-3 py-2"><input type="radio" name={`choice-${word}`} value={option} checked={normalize(answers.delayedRecall.multipleChoice[word])===normalize(option)} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,multipleChoice:{...c.delayedRecall.multipleChoice,[word]:toUpper(e.target.value)}}}))}/> <span className="ml-1 uppercase">{option}</span></label>)}</div></div>}</div>})}</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+
+      {step === 14 && <div><h2 className="text-3xl font-black">Orientación</h2><p className="mt-2 text-slate-500">Registre por separado día del mes, mes, año, día de la semana, lugar y ciudad. La guía asigna un punto independiente a cada componente; separarlos evita que un calendario revele la respuesta y permite calificar 0–6 correctamente.</p><div className="mt-6 grid gap-4 md:grid-cols-2">{[['day','Día del mes'],['month','Mes'],['year','Año'],['weekday','Día de la semana'],['place','Lugar exacto'],['city','Ciudad/localidad']].map(([key,label])=><input key={key} className="rounded-xl border-2 p-4" placeholder={label} value={answers.orientation[key]} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,[key]:e.target.value}}))}/>)}</div>{saveError&&<p className="mt-5 rounded-xl bg-red-50 p-4 font-bold text-red-700">{saveError}</p>}<NextStepButton themeClass={theme} onClick={saveResult} disabled={saving || !authReady}>{saving?'Guardando…':'Guardar resultados'}</NextStepButton></div>}
+
+      {step === 15 && <div className="py-14 text-center"><div className={`mx-auto flex h-24 w-24 items-center justify-center rounded-full text-5xl text-white ${cfg.theme==='blue'?'bg-blue-600':'bg-teal-600'}`}>✓</div><h2 className="mt-6 text-3xl font-black">Evaluación registrada</h2><p className="mt-3 text-slate-600">El resultado queda pendiente de revisión profesional antes de calcular el puntaje final.</p>{saveMessage&&<p className="mx-auto mt-5 max-w-lg rounded-xl bg-green-50 p-4 font-bold text-green-700">{saveMessage}</p>}<button onClick={()=>setScreen('home')} className="mt-8 rounded-xl bg-slate-800 px-8 py-3 font-black text-white">Volver al inicio</button></div>}
+    </PageCard></div>
+  );
 }
