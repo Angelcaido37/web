@@ -7,7 +7,9 @@ import {
   deleteDoc,
   doc,
   getFirestore,
+  getDoc,
   onSnapshot,
+  setDoc,
   updateDoc,
 } from 'firebase/firestore';
 
@@ -54,6 +56,45 @@ const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
 const appId = 'paneg-bd';
 const RESULTS_PATH = ['artifacts', appId, 'data', 'moca_results', 'results'];
+const SETTINGS_DOC_PATH = ['artifacts', appId, 'data', 'settings'];
+const DEFAULT_EVALUATOR_PASSWORD = 'paneg2025';
+const PASSWORD_HASH_STORAGE_KEY = 'paneg.evaluatorPasswordHash';
+
+const hashText = async (value = '') => {
+  const text = String(value);
+  if (typeof window !== 'undefined' && window.crypto?.subtle && window.TextEncoder) {
+    const encoded = new TextEncoder().encode(text);
+    const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  // Respaldo para navegadores sin Web Crypto. No debe usarse como seguridad fuerte.
+  return `plain:${text}`;
+};
+
+const getDefaultEvaluatorPasswordHash = () => hashText(DEFAULT_EVALUATOR_PASSWORD);
+
+const getEvaluatorPasswordHash = async () => {
+  const localHash = typeof window !== 'undefined' ? window.localStorage.getItem(PASSWORD_HASH_STORAGE_KEY) : '';
+  try {
+    const snap = await getDoc(doc(db, ...SETTINGS_DOC_PATH));
+    const remoteHash = snap.exists() ? snap.data()?.evaluatorPasswordHash : '';
+    if (remoteHash) {
+      if (typeof window !== 'undefined') window.localStorage.setItem(PASSWORD_HASH_STORAGE_KEY, remoteHash);
+      return remoteHash;
+    }
+  } catch (error) {
+    console.warn('No se pudo leer la contraseña remota de investigadores; se usará respaldo local.', error);
+  }
+  return localHash || getDefaultEvaluatorPasswordHash();
+};
+
+const saveEvaluatorPasswordHash = async (passwordHash) => {
+  await setDoc(doc(db, ...SETTINGS_DOC_PATH), {
+    evaluatorPasswordHash: passwordHash,
+    updatedAt: Date.now(),
+  }, { merge: true });
+  if (typeof window !== 'undefined') window.localStorage.setItem(PASSWORD_HASH_STORAGE_KEY, passwordHash);
+};
 
 const LETTER_SEQUENCE = 'FBACMNAAJKLBAFAKDEAAAJAMOFAAB'.split('');
 const TARGET_A_COUNT = LETTER_SEQUENCE.filter((letter) => letter === 'A').length;
@@ -356,15 +397,21 @@ const initialAnswers = (phase, version) => ({
   },
 });
 
-function PageHeader({ phase, version, progress, theme }) {
+function PageHeader({ phase, version, progress, theme, onGoHome, onGoEvaluator }) {
   return (
     <header className="fixed left-0 right-0 top-0 z-20 border-b bg-white px-5 py-4 shadow-sm">
-      <div className="mx-auto flex max-w-5xl items-center gap-5">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4">
         <h1 className="font-black text-slate-900">PANEG · {phase} v{version}</h1>
-        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
-          <div className={`h-full ${theme === 'blue' ? 'bg-blue-600' : 'bg-teal-600'}`} style={{ width: `${progress}%` }} />
+        <div className="min-w-[160px] flex-1">
+          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className={`h-full ${theme === 'blue' ? 'bg-blue-600' : 'bg-teal-600'}`} style={{ width: `${progress}%` }} />
+          </div>
         </div>
         <span className="text-xs font-bold">{progress}%</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button type="button" onClick={onGoHome} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50">Tests</button>
+          <button type="button" onClick={onGoEvaluator} className="rounded-lg bg-violet-700 px-3 py-2 text-xs font-black text-white hover:bg-violet-800">Investigadores</button>
+        </div>
       </div>
     </header>
   );
@@ -1306,7 +1353,16 @@ export default function App() {
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
   const [evaluatorPassword, setEvaluatorPassword] = useState('');
+  const [showEvaluatorPassword, setShowEvaluatorPassword] = useState(false);
+  const [evaluatorLoginBusy, setEvaluatorLoginBusy] = useState(false);
+  const [evaluatorLoginMessage, setEvaluatorLoginMessage] = useState('');
   const [evaluatorUnlocked, setEvaluatorUnlocked] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [showPasswordDialogFields, setShowPasswordDialogFields] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState('');
+  const [passwordChangeError, setPasswordChangeError] = useState('');
+  const [passwordChanging, setPasswordChanging] = useState(false);
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);
   const [selectedAnalysis, setSelectedAnalysis] = useState(null);
@@ -1810,6 +1866,128 @@ export default function App() {
     setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, domainScores: domains, analyticSummary, status: 'Revisado por evaluador' }) : current);
   };
 
+  const openEvaluatorLogin = () => {
+    setEvaluatorPassword('');
+    setEvaluatorLoginMessage('');
+    setShowEvaluatorPassword(false);
+    setScreen(evaluatorUnlocked ? 'evaluator' : 'evaluatorLogin');
+  };
+
+  const goToTests = () => {
+    const inStartedTest = screen === 'test' && step > 0 && step < 15;
+    if (inStartedTest && !window.confirm('Hay una evaluación en curso. Si cambia de pantalla puede perder la captura no guardada. ¿Continuar?')) return;
+    setScreen('phase');
+  };
+
+  const handleEvaluatorLogin = async () => {
+    setEvaluatorLoginMessage('');
+    if (!evaluatorPassword.trim()) {
+      setEvaluatorLoginMessage('Escriba la contraseña de investigadores.');
+      return;
+    }
+    setEvaluatorLoginBusy(true);
+    try {
+      const inputHash = await hashText(evaluatorPassword.trim());
+      const expectedHash = await getEvaluatorPasswordHash();
+      if (inputHash === expectedHash) {
+        setEvaluatorUnlocked(true);
+        setEvaluatorPassword('');
+        setShowEvaluatorPassword(false);
+        setScreen('evaluator');
+      } else {
+        setEvaluatorLoginMessage('Contraseña incorrecta.');
+      }
+    } catch (error) {
+      console.error(error);
+      setEvaluatorLoginMessage('No fue posible validar la contraseña. Revise la conexión o intente de nuevo.');
+    } finally {
+      setEvaluatorLoginBusy(false);
+    }
+  };
+
+  const openPasswordDialog = () => {
+    setPasswordForm({ current: '', next: '', confirm: '' });
+    setPasswordChangeMessage('');
+    setPasswordChangeError('');
+    setShowPasswordDialogFields(false);
+    setPasswordDialogOpen(true);
+  };
+
+  const changeEvaluatorPassword = async () => {
+    setPasswordChangeMessage('');
+    setPasswordChangeError('');
+    const current = passwordForm.current.trim();
+    const nextPassword = passwordForm.next.trim();
+    const confirmPassword = passwordForm.confirm.trim();
+    if (!current || !nextPassword || !confirmPassword) {
+      setPasswordChangeError('Complete la contraseña anterior, la nueva y la confirmación.');
+      return;
+    }
+    if (nextPassword.length < 6) {
+      setPasswordChangeError('La nueva contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setPasswordChangeError('La nueva contraseña y su repetición no coinciden.');
+      return;
+    }
+    if (current === nextPassword) {
+      setPasswordChangeError('La nueva contraseña debe ser diferente de la anterior.');
+      return;
+    }
+    setPasswordChanging(true);
+    try {
+      const expectedHash = await getEvaluatorPasswordHash();
+      const currentHash = await hashText(current);
+      if (currentHash !== expectedHash) {
+        setPasswordChangeError('La contraseña anterior no es correcta.');
+        return;
+      }
+      const newHash = await hashText(nextPassword);
+      await saveEvaluatorPasswordHash(newHash);
+      setPasswordChangeMessage('Contraseña actualizada correctamente.');
+      setPasswordForm({ current: '', next: '', confirm: '' });
+      window.setTimeout(() => setPasswordDialogOpen(false), 800);
+    } catch (error) {
+      console.error(error);
+      setPasswordChangeError('No fue posible guardar la nueva contraseña. Intente nuevamente.');
+    } finally {
+      setPasswordChanging(false);
+    }
+  };
+
+  const renderPasswordDialog = () => passwordDialogOpen && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+      <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-black text-slate-900">Cambiar contraseña</h2>
+            <p className="mt-1 text-sm text-slate-500">Actualice el acceso al panel de investigadores.</p>
+          </div>
+          <button type="button" onClick={() => setPasswordDialogOpen(false)} className="rounded-full bg-slate-100 px-3 py-1 font-black text-slate-600">×</button>
+        </div>
+        <div className="mt-5 space-y-4">
+          <label className="block text-sm font-black text-slate-700">Contraseña anterior
+            <input type={showPasswordDialogFields ? 'text' : 'password'} className="mt-2 w-full rounded-xl border-2 border-slate-200 p-3 font-normal" value={passwordForm.current} onChange={(e) => setPasswordForm((currentForm) => ({ ...currentForm, current: e.target.value }))} />
+          </label>
+          <label className="block text-sm font-black text-slate-700">Nueva contraseña
+            <input type={showPasswordDialogFields ? 'text' : 'password'} className="mt-2 w-full rounded-xl border-2 border-slate-200 p-3 font-normal" value={passwordForm.next} onChange={(e) => setPasswordForm((currentForm) => ({ ...currentForm, next: e.target.value }))} />
+          </label>
+          <label className="block text-sm font-black text-slate-700">Repetir nueva contraseña
+            <input type={showPasswordDialogFields ? 'text' : 'password'} className="mt-2 w-full rounded-xl border-2 border-slate-200 p-3 font-normal" value={passwordForm.confirm} onChange={(e) => setPasswordForm((currentForm) => ({ ...currentForm, confirm: e.target.value }))} />
+          </label>
+          <label className="flex items-center gap-2 text-sm font-bold text-slate-600"><input type="checkbox" checked={showPasswordDialogFields} onChange={(e) => setShowPasswordDialogFields(e.target.checked)} /> Mostrar contraseñas</label>
+          {passwordChangeError && <p className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{passwordChangeError}</p>}
+          {passwordChangeMessage && <p className="rounded-xl bg-green-50 p-3 text-sm font-bold text-green-700">{passwordChangeMessage}</p>}
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <button type="button" onClick={() => setPasswordDialogOpen(false)} className="rounded-xl border border-slate-200 px-5 py-3 font-black text-slate-700">Cancelar</button>
+            <button type="button" disabled={passwordChanging} onClick={changeEvaluatorPassword} className="rounded-xl bg-violet-700 px-5 py-3 font-black text-white disabled:opacity-50">{passwordChanging ? 'Guardando…' : 'Guardar cambio'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const progress = Math.round((step / totalSteps) * 100);
 
   if (screen === 'home') {
@@ -1826,7 +2004,7 @@ export default function App() {
               <h2 className="mt-4 text-2xl font-black text-slate-900">Participante</h2>
               <p className="mt-2 text-slate-600">Consentimiento, registro y aplicación supervisada.</p>
             </button>
-            <button onClick={() => { setEvaluatorPassword(''); setEvaluatorUnlocked(false); setScreen('evaluatorLogin'); }} className="rounded-2xl border-2 border-violet-100 bg-violet-50 p-8 text-left hover:border-violet-500">
+            <button onClick={openEvaluatorLogin} className="rounded-2xl border-2 border-violet-100 bg-violet-50 p-8 text-left hover:border-violet-500">
               <span className="text-4xl">🔬</span>
               <h2 className="mt-4 text-2xl font-black text-slate-900">Investigadores</h2>
               <p className="mt-2 text-slate-600">Revisión profesional, puntuación y gestión de registros.</p>
@@ -1843,7 +2021,11 @@ export default function App() {
   if (screen === 'phase') {
     return (
       <div className="min-h-screen bg-slate-100 p-6">
-        <div className="mx-auto mt-20 max-w-xl rounded-3xl bg-white p-10 shadow-xl">
+        <div className="mx-auto flex max-w-5xl justify-end gap-2">
+          <button type="button" onClick={() => setScreen('home')} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">Inicio</button>
+          <button type="button" onClick={openEvaluatorLogin} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-black text-white">Investigadores</button>
+        </div>
+        <div className="mx-auto mt-8 max-w-xl rounded-3xl bg-white p-10 shadow-xl">
           <h2 className="text-center text-3xl font-black text-slate-900">Seleccione la fase</h2>
           <div className="mt-8 grid grid-cols-2 gap-4">
             {Object.keys(VERSION_CONFIG).map((key) => (
@@ -1866,6 +2048,10 @@ export default function App() {
   if (screen === 'consent') {
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8">
+        <div className="mx-auto mb-4 flex max-w-5xl justify-end gap-2">
+          <button type="button" onClick={goToTests} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">Tests</button>
+          <button type="button" onClick={openEvaluatorLogin} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-black text-white">Investigadores</button>
+        </div>
         <div className="mx-auto max-w-3xl rounded-3xl bg-white p-6 shadow-xl md:p-10">
           <h1 className="text-3xl font-black text-slate-900">{consentText.title}</h1>
           <div className="mt-6 max-h-[55vh] space-y-5 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-5">
@@ -1893,10 +2079,22 @@ export default function App() {
   if (screen === 'evaluatorLogin') {
     return (
       <div className="min-h-screen bg-slate-100 p-6">
-        <div className="mx-auto mt-24 max-w-md rounded-3xl bg-white p-10 shadow-xl">
+        <div className="mx-auto flex max-w-5xl justify-end gap-2">
+          <button type="button" onClick={goToTests} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">Tests</button>
+          <button type="button" onClick={() => setScreen('home')} className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-black text-white">Inicio</button>
+        </div>
+        <div className="mx-auto mt-16 max-w-md rounded-3xl bg-white p-10 shadow-xl">
           <h2 className="text-3xl font-black">Acceso de investigadores</h2>
-          <input type="password" className="mt-8 w-full rounded-xl border-2 p-4" placeholder="Contraseña" value={evaluatorPassword} onChange={(e) => setEvaluatorPassword(e.target.value)} />
-          <button onClick={() => { if (evaluatorPassword === 'paneg2025') { setEvaluatorUnlocked(true); setEvaluatorPassword(''); setScreen('evaluator'); } else alert('Contraseña incorrecta'); }} className="mt-4 w-full rounded-xl bg-violet-600 py-4 font-black text-white">Ingresar</button>
+          <p className="mt-2 text-sm text-slate-500">Ingrese la contraseña para revisar resultados y administrar registros.</p>
+          <div className="mt-8">
+            <label className="text-sm font-black text-slate-700">Contraseña</label>
+            <div className="mt-2 flex overflow-hidden rounded-xl border-2 border-slate-200 bg-white">
+              <input type={showEvaluatorPassword ? 'text' : 'password'} className="min-w-0 flex-1 p-4 outline-none" placeholder="Contraseña" value={evaluatorPassword} onChange={(e) => setEvaluatorPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleEvaluatorLogin(); }} />
+              <button type="button" onClick={() => setShowEvaluatorPassword((current) => !current)} className="border-l px-4 text-sm font-black text-violet-700">{showEvaluatorPassword ? 'Ocultar' : 'Ver'}</button>
+            </div>
+          </div>
+          {evaluatorLoginMessage && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{evaluatorLoginMessage}</p>}
+          <button disabled={evaluatorLoginBusy} onClick={handleEvaluatorLogin} className="mt-4 w-full rounded-xl bg-violet-600 py-4 font-black text-white disabled:opacity-50">{evaluatorLoginBusy ? 'Validando…' : 'Ingresar'}</button>
           <button onClick={() => setScreen('home')} className="mt-4 w-full text-sm font-bold text-slate-500">Volver</button>
         </div>
       </div>
@@ -1936,13 +2134,18 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8">
         <div className="mx-auto max-w-[1500px]">
-          <div className="mb-6 flex items-center justify-between">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-3xl font-black">Panel de investigadores</h1>
               <p className="mt-1 text-sm text-slate-500">Revisión profesional arriba; tablero analítico integrado en la parte inferior.</p>
             </div>
-            <button onClick={() => { setEvaluatorUnlocked(false); setEvaluatorPassword(''); setSelected(null); setSelectedAnalysis(null); setManual({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 }); setScreen('home'); }} className="rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Salir</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={goToTests} className="rounded-lg border border-blue-200 bg-white px-4 py-2 font-black text-blue-700 hover:bg-blue-50">Ir a tests</button>
+              <button type="button" onClick={openPasswordDialog} className="rounded-lg bg-violet-700 px-4 py-2 font-black text-white hover:bg-violet-800">Cambiar contraseña</button>
+              <button onClick={() => { setEvaluatorUnlocked(false); setEvaluatorPassword(''); setSelected(null); setSelectedAnalysis(null); setManual({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 }); setScreen('home'); }} className="rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Salir</button>
+            </div>
           </div>
+          {renderPasswordDialog()}
           <div className="grid gap-6 xl:grid-cols-[minmax(860px,1.35fr)_minmax(420px,0.65fr)]">
             <div className="rounded-2xl bg-white shadow">
               <div className="border-b p-4">
@@ -2052,7 +2255,7 @@ export default function App() {
 
   const next = () => setStep((current) => Math.min(15, current + 1));
   return (
-    <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-24"><PageHeader phase={phase} version={cfg.version} progress={progress} theme={cfg.theme}/><PageCard>
+    <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-24"><PageHeader phase={phase} version={cfg.version} progress={progress} theme={cfg.theme} onGoHome={goToTests} onGoEvaluator={openEvaluatorLogin}/><PageCard>
       {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input className="rounded-xl border-2 p-4" placeholder="Nombre completo" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/><label className="text-sm font-bold text-slate-700">Edad<input type="number" inputMode="numeric" min="18" max="120" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="number" inputMode="numeric" min="0" max="40" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><input type="date" className="rounded-xl border-2 p-4" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40}/></div>}
 
       {step === 1 && <div><h2 className="text-3xl font-black">Alternancia conceptual</h2><p className="mt-2 text-slate-500">Dibuje una línea continua alternando número y letra en orden ascendente, sin unir el final con el inicio.</p><div className="mt-6"><TrailDrawingCanvas image={cfg.trailImage} value={answers.trail.drawing} onChange={(drawing) => setAnswers((c) => ({ ...c, trail: { ...c.trail, drawing } }))}/></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.trail.drawing}/></div>}
