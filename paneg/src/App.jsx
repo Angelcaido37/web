@@ -217,6 +217,17 @@ const normalize = (value = '') =>
 
 
 const toUpper = (value = '') => String(value).toLocaleUpperCase('es-MX');
+const digitsOnly = (value = '', maxLength = null) => {
+  const clean = String(value || '').replace(/\D/g, '');
+  return maxLength ? clean.slice(0, maxLength) : clean;
+};
+const MAX_FLUENCY_AUDIO_BYTES = 600000;
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(blob);
+});
 
 const analyzeFluencyTranscript = (transcript = '', targetLetter = '') => {
   const tokens = String(transcript)
@@ -366,6 +377,9 @@ const initialAnswers = (phase, version) => ({
     sentence2: '',
     fluencyTranscript: '',
     fluencyWordCountSuggested: 0,
+    fluencyAudioDataUrl: '',
+    fluencyAudioMime: '',
+    fluencyAudioSize: 0,
   },
   abstraction: {
     example: '',
@@ -1367,6 +1381,7 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [selectedAnalysis, setSelectedAnalysis] = useState(null);
   const [manual, setManual] = useState({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 });
+  const [fluencyReviewText, setFluencyReviewText] = useState('');
   const resultsDashboardRef = useRef(null);
 
   const cfg = VERSION_CONFIG[phase];
@@ -1485,15 +1500,20 @@ export default function App() {
     setScreen('consent');
   };
 
-  const setParticipant = (key, value) =>
-    setAnswers((current) => ({ ...current, participant: { ...current.participant, [key]: value } }));
+  const setParticipant = (key, value) => {
+    let nextValue = value;
+    if (key === 'name') nextValue = toUpper(value);
+    if (key === 'age') nextValue = digitsOnly(value, 3);
+    if (key === 'educationYears') nextValue = digitsOnly(value, 2);
+    setAnswers((current) => ({ ...current, participant: { ...current.participant, [key]: nextValue } }));
+  };
 
   const acceptConsent = () => {
-    if (!answers.consent.read || !answers.consent.participate || !answers.consent.participantName.trim() || !answers.consent.adult) return;
+    if (!answers.consent.read || !answers.consent.participate || !answers.consent.participantName.trim() || !answers.consent.adult || !answers.consent.audio) return;
     setAnswers((current) => ({
       ...current,
-      consent: { ...current.consent, acceptedAt: new Date().toISOString() },
-      participant: { ...current.participant, name: current.consent.participantName.trim() },
+      consent: { ...current.consent, participantName: toUpper(current.consent.participantName.trim()), acceptedAt: new Date().toISOString() },
+      participant: { ...current.participant, name: toUpper(current.consent.participantName.trim()) },
       administration: { ...current.administration, startedAt: Date.now() },
     }));
     setScreen('test');
@@ -1632,11 +1652,11 @@ export default function App() {
             ...current,
             language: {
               ...current.language,
-              fluencyTranscript: `${current.language.fluencyTranscript || ''} ${finalText}`.trim(),
+              fluencyTranscript: toUpper(`${current.language.fluencyTranscript || ''} ${finalText}`.trim()),
             },
           }));
         }
-        setFluencyInterimTranscript(interimText);
+        setFluencyInterimTranscript(toUpper(interimText));
       };
       recognition.onerror = (event) => {
         setFluencyRecognitionStatus(`Reconocimiento de voz: ${event.error || 'error'}. La revisión manual sigue disponible.`);
@@ -1704,7 +1724,29 @@ export default function App() {
           micMonitorFrameRef.current = null;
           audioContextRef.current?.close?.();
           audioContextRef.current = null;
-          if (blob.size > 0) setFluencyAudioUrl(URL.createObjectURL(blob));
+          if (blob.size > 0) {
+            const objectUrl = URL.createObjectURL(blob);
+            setFluencyAudioUrl(objectUrl);
+            if (blob.size <= MAX_FLUENCY_AUDIO_BYTES) {
+              blobToDataUrl(blob)
+                .then((dataUrl) => setAnswers((current) => ({
+                  ...current,
+                  language: {
+                    ...current.language,
+                    fluencyAudioDataUrl: dataUrl,
+                    fluencyAudioMime: recorder.mimeType || 'audio/webm',
+                    fluencyAudioSize: blob.size,
+                  },
+                })))
+                .catch(() => setFluencyMicError('La grabación se creó, pero no se pudo preparar para conservarla en el registro.'));
+            } else {
+              setAnswers((current) => ({
+                ...current,
+                language: { ...current.language, fluencyAudioDataUrl: '', fluencyAudioMime: recorder.mimeType || 'audio/webm', fluencyAudioSize: blob.size },
+              }));
+              setFluencyMicError(`La grabación pesa ${Math.round(blob.size / 1024)} KB y puede exceder el límite seguro de Firebase. Descárguela localmente antes de salir.`);
+            }
+          }
           if (blob.size === 0) {
             setFluencyMicError('La grabación terminó sin datos. Verifique el micrófono y sus permisos.');
           } else if (micPeakRef.current < 3) {
@@ -1798,11 +1840,13 @@ export default function App() {
   const validateBeforeSave = () => {
     const p = answers.participant;
     const o = answers.orientation;
-    if (!p.name || !p.age || p.educationYears === '') return 'Complete los datos del participante.';
-    if (Number(p.age) < 18) return 'Este estudio solo admite participantes de 18 años o más.';
-    if (![o.day, o.month, o.year, o.weekday, o.place, o.city].every((item) => String(item).trim())) {
-      return 'Registre los seis elementos de orientación. Use “No sabe” cuando corresponda.';
-    }
+    if (!p.name || !p.age || p.educationYears === '' || !p.birthDate || !p.sex) return 'Complete nombre, edad, escolaridad, fecha de nacimiento y sexo del participante.';
+    if (Number(p.age) < 18 || Number(p.age) > 120) return 'La edad debe estar entre 18 y 120 años.';
+    if (Number(p.educationYears) < 0 || Number(p.educationYears) > 40) return 'La escolaridad debe estar entre 0 y 40 años completos.';
+    if (!/^\d{1,2}$/.test(String(o.day)) || Number(o.day) < 1 || Number(o.day) > 31) return 'En orientación, el día del mes debe ser numérico y estar entre 1 y 31.';
+    if (!/^\d{1,2}$/.test(String(o.month)) || Number(o.month) < 1 || Number(o.month) > 12) return 'En orientación, el mes debe ser numérico y estar entre 1 y 12.';
+    if (!/^\d{4}$/.test(String(o.year))) return 'En orientación, el año debe capturarse con cuatro dígitos.';
+    if (![o.weekday, o.place, o.city].every((item) => String(item).trim())) return 'Registre día de la semana, lugar exacto y ciudad/localidad.';
     return '';
   };
 
@@ -1854,6 +1898,12 @@ export default function App() {
     const pairedRecord = findPairedRecord(results, selected);
     const comparison = buildPrePostComparison(selected, finalScore, pairedRecord);
     const analyticSummary = buildInterpretation(finalScore, domains, comparison);
+    const selectedCfg = Object.values(VERSION_CONFIG).find((item) => item.version === selected.version) || cfg;
+    const fluencyValidation = {
+      fluencyValidatedTranscript: toUpper(fluencyReviewText),
+      fluencyValidatedCandidates: analyzeFluencyTranscript(fluencyReviewText, selectedCfg.fluencyLetter).validCandidates.map((item) => toUpper(item)),
+      fluencyValidatedAt: Date.now(),
+    };
     await updateDoc(doc(db, ...RESULTS_PATH, selected.id), {
       manualScores: manual,
       evaluatorReviewed: true,
@@ -1861,9 +1911,10 @@ export default function App() {
       finalScore,
       domainScores: domains,
       analyticSummary,
+      professionalReview: fluencyValidation,
       status: 'Revisado por evaluador',
     });
-    setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, domainScores: domains, analyticSummary, status: 'Revisado por evaluador' }) : current);
+    setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, domainScores: domains, analyticSummary, professionalReview: fluencyValidation, status: 'Revisado por evaluador' }) : current);
   };
 
   const openEvaluatorLogin = () => {
@@ -2067,9 +2118,10 @@ export default function App() {
             <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.participate} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, participate: e.target.checked } }))}/><span>Acepto participar voluntariamente en esta investigación.</span></label>
             <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.adult} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, adult: e.target.checked } }))}/><span>Declaro que tengo 18 años o más.</span></label>
             <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={answers.consent.audio} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, audio: e.target.checked } }))}/><span>Autorizo, de manera independiente, la grabación de fragmentos de voz cuando el protocolo la habilite.</span></label>
-            <input className="w-full rounded-xl border-2 border-slate-200 p-4" placeholder="Nombre del participante" value={answers.consent.participantName} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, participantName: e.target.value } }))}/>
+            <input className="w-full rounded-xl border-2 border-slate-200 p-4 uppercase" placeholder="Nombre del participante" value={answers.consent.participantName} onChange={(e) => setAnswers((c) => ({ ...c, consent: { ...c.consent, participantName: toUpper(e.target.value) } }))}/>
+            {(!answers.consent.read || !answers.consent.participate || !answers.consent.adult || !answers.consent.audio || !answers.consent.participantName.trim()) && <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Para continuar debe aceptar todos los consentimientos, incluida la autorización de audio, y capturar el nombre del participante.</p>}
           </div>
-          <button disabled={!answers.consent.read || !answers.consent.participate || !answers.consent.adult || !answers.consent.participantName.trim()} onClick={acceptConsent} className={`mt-6 w-full rounded-xl py-4 font-black text-white disabled:opacity-40 ${theme}`}>Acepto y deseo continuar</button>
+          <button disabled={!answers.consent.read || !answers.consent.participate || !answers.consent.adult || !answers.consent.audio || !answers.consent.participantName.trim()} onClick={acceptConsent} className={`mt-6 w-full rounded-xl py-4 font-black text-white disabled:opacity-40 ${theme}`}>Acepto y deseo continuar</button>
           <button onClick={() => setScreen('home')} className="mt-3 w-full rounded-xl py-3 font-bold text-slate-600">No acepto / salir</button>
         </div>
       </div>
@@ -2105,15 +2157,17 @@ export default function App() {
   const selectForProfessionalReview = (row) => {
     const rowCfg = Object.values(VERSION_CONFIG).find((item) => item.version === row.version) || cfg;
     setSelected(row);
+    const existingReviewText = row.professionalReview?.fluencyValidatedTranscript || row.language?.fluencyTranscript || '';
     setManual(row.manualScores || {
       trail: 0,
       copy: 0,
       clock: 0,
       naming: suggestedNamingScore(row, rowCfg),
       repetition: suggestedRepetitionScore(row, rowCfg),
-      fluency: 0,
+      fluency: analyzeFluencyTranscript(existingReviewText, rowCfg.fluencyLetter).suggestedPoint,
       abstraction: suggestedAbstractionScore(row, rowCfg),
     });
+    setFluencyReviewText(toUpper(existingReviewText));
   };
 
   const openResultsDashboard = (row) => {
@@ -2214,7 +2268,7 @@ export default function App() {
 
                     <section className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/40 p-4">
                       <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">8. Lenguaje · Fluidez con {selectedCfg.fluencyLetter}</h3><ScoreInput label="Fluidez" max={1} value={manual.fluency} onChange={(value)=>setManual((c)=>({...c,fluency:value}))}/></div>
-                      <div className="rounded-xl bg-white p-3"><p className="whitespace-pre-wrap"><strong>Transcripción:</strong> {selected.language?.fluencyTranscript || '—'}</p>{(() => { const analysis = analyzeFluencyTranscript(selected.language?.fluencyTranscript || '', selectedCfg.fluencyLetter); return <div className="mt-3 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-950"><p><strong>Candidatas únicas:</strong> {analysis.validCandidates.length} · <strong>Punto sugerido:</strong> {analysis.suggestedPoint}/1</p><p className="mt-1"><strong>Válidas por forma:</strong> {analysis.validCandidates.length ? analysis.validCandidates.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : '—'}</p></div>; })()}<p className="mt-2 text-sm text-slate-500">La transcripción automática es evidencia auxiliar; confirme significado, nombres propios, conjugaciones, variantes de raíz y errores del reconocimiento.</p></div><ScoringGuide><p>Asigne 1 punto si produjo <strong>11 o más palabras válidas en 60 segundos</strong>.</p><p>No cuente nombres propios, números, formas conjugadas de un verbo, repeticiones ni palabras que comiencen con otra letra. Revise manualmente la transcripción automática.</p></ScoringGuide>
+                      <div className="rounded-xl bg-white p-3"><p className="whitespace-pre-wrap"><strong>Transcripción automática original:</strong> {selected.language?.fluencyTranscript || '—'}</p>{selected.language?.fluencyAudioDataUrl ? <div className="mt-3 rounded-xl border bg-slate-50 p-3"><p className="mb-2 text-sm font-black text-slate-700">Audio de fluidez registrado</p><audio controls src={selected.language.fluencyAudioDataUrl} className="w-full"/></div> : <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-800">No hay audio conservado en Firebase para este registro. Si el archivo excedió el límite seguro, debió descargarse localmente al terminar la prueba.</p>}<label className="mt-4 block text-sm font-black text-slate-700">Validación del investigador: deje solo las palabras/frases que considere válidas<textarea className="mt-2 w-full rounded-xl border-2 p-3 font-normal uppercase" rows="5" value={fluencyReviewText} onChange={(e)=>setFluencyReviewText(toUpper(e.target.value))}/></label>{(() => { const analysis = analyzeFluencyTranscript(fluencyReviewText || selected.language?.fluencyTranscript || '', selectedCfg.fluencyLetter); return <div className="mt-3 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-950"><p><strong>Candidatas únicas tras validación:</strong> {analysis.validCandidates.length} · <strong>Punto sugerido:</strong> {analysis.suggestedPoint}/1</p><p className="mt-1"><strong>Válidas por forma:</strong> {analysis.validCandidates.length ? analysis.validCandidates.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : '—'}</p><p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : '—'}</p><p className="mt-2 text-xs">Después de editar este recuadro, ajuste manualmente el punto de fluidez y presione “Guardar revisión profesional”.</p></div>; })()}<p className="mt-2 text-sm text-slate-500">La transcripción automática es evidencia auxiliar; confirme significado, nombres propios, conjugaciones, variantes de raíz y errores del reconocimiento escuchando el audio cuando esté disponible.</p></div><ScoringGuide><p>Asigne 1 punto si produjo <strong>11 o más palabras válidas en 60 segundos</strong>.</p><p>No cuente nombres propios, números, formas conjugadas de un verbo, repeticiones ni palabras que comiencen con otra letra. Revise manualmente la transcripción automática.</p></ScoringGuide>
                     </section>
 
                     <section className="rounded-2xl border border-cyan-200 bg-cyan-50/40 p-4">
@@ -2256,7 +2310,7 @@ export default function App() {
   const next = () => setStep((current) => Math.min(15, current + 1));
   return (
     <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-24"><PageHeader phase={phase} version={cfg.version} progress={progress} theme={cfg.theme} onGoHome={goToTests} onGoEvaluator={openEvaluatorLogin}/><PageCard>
-      {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input className="rounded-xl border-2 p-4" placeholder="Nombre completo" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/><label className="text-sm font-bold text-slate-700">Edad<input type="number" inputMode="numeric" min="18" max="120" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="number" inputMode="numeric" min="0" max="40" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><input type="date" className="rounded-xl border-2 p-4" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40}/></div>}
+      {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input className="rounded-xl border-2 p-4 uppercase" placeholder="NOMBRE COMPLETO" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/><label className="text-sm font-bold text-slate-700">Edad<input type="text" inputMode="numeric" maxLength="3" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="text" inputMode="numeric" maxLength="2" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><label className="text-sm font-bold text-slate-700">Fecha de nacimiento<input type="date" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/></label><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div>{(!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex) && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Complete nombre, edad válida, escolaridad, fecha de nacimiento y sexo para continuar.</p>}<NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex}/></div>}
 
       {step === 1 && <div><h2 className="text-3xl font-black">Alternancia conceptual</h2><p className="mt-2 text-slate-500">Dibuje una línea continua alternando número y letra en orden ascendente, sin unir el final con el inicio.</p><div className="mt-6"><TrailDrawingCanvas image={cfg.trailImage} value={answers.trail.drawing} onChange={(drawing) => setAnswers((c) => ({ ...c, trail: { ...c.trail, drawing } }))}/></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.trail.drawing}/></div>}
 
@@ -2270,21 +2324,99 @@ export default function App() {
 
       {step === 6 && <div><h2 className="text-3xl font-black">Memoria · segundo intento</h2><p className="mt-2 text-slate-500">Repita la misma lista completa, incluso si el primer intento fue exitoso.</p><button type="button" disabled={played.memory2} onClick={()=>playTimedSequence(cfg.words,'memory2',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory2?'Lista reproducida':'Escuchar lista otra vez'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial2.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial2=[...c.memoryTrial2]; memoryTrial2[index]=toUpper(e.target.value); return {...c,memoryTrial2};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 2: {countExactWords(answers.memoryTrial2, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><p className="mt-5 font-bold text-slate-700">Al terminar, informe: “Le volveré a preguntar estas palabras al final de la prueba”.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory2}/></div>}
 
-      {step === 7 && <div><h2 className="text-3xl font-black">Atención · dígitos</h2><div className="mt-6 space-y-6"><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia delante</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-forward.mp3`)} text={cfg.forwardDigits.join(', ')} onceKey="digitsForward" played={played.digitsForward} onPlayed={markPlayed}/><input className="mt-4 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta oral" value={answers.attention.forward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,forward:e.target.value}}))}/></section><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia atrás</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-backward.mp3`)} text={cfg.backwardDigits.join(', ')} onceKey="digitsBackward" played={played.digitsBackward} onPlayed={markPlayed}/><input className="mt-4 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta oral en orden inverso" value={answers.attention.backward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,backward:e.target.value}}))}/></section></div><NextStepButton themeClass={theme} onClick={next} disabled={!played.digitsForward || !played.digitsBackward}/></div>}
+      {step === 7 && <div><h2 className="text-3xl font-black">Atención · dígitos</h2><div className="mt-6 space-y-6"><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia delante</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-forward.mp3`)} text={cfg.forwardDigits.join(', ')} onceKey="digitsForward" played={played.digitsForward} onPlayed={markPlayed}/><input type="text" inputMode="numeric" maxLength="5" className="mt-4 w-full rounded-xl border-2 p-3 tracking-widest" placeholder="Registrar solo dígitos" value={answers.attention.forward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,forward:digitsOnly(e.target.value,5)}}))}/><p className="mt-2 text-xs font-bold text-slate-500">Solo se aceptan números; no escriba letras ni espacios.</p></section><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia atrás</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-backward.mp3`)} text={cfg.backwardDigits.join(', ')} onceKey="digitsBackward" played={played.digitsBackward} onPlayed={markPlayed}/><input type="text" inputMode="numeric" maxLength="3" className="mt-4 w-full rounded-xl border-2 p-3 tracking-widest" placeholder="Registrar solo dígitos en orden inverso" value={answers.attention.backward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,backward:digitsOnly(e.target.value,3)}}))}/><p className="mt-2 text-xs font-bold text-slate-500">Solo se aceptan números; no escriba letras ni espacios.</p></section></div><NextStepButton themeClass={theme} onClick={next} disabled={!played.digitsForward || !played.digitsBackward || answers.attention.forward.length !== 5 || answers.attention.backward.length !== 3}/></div>}
 
       {step === 8 && <div><h2 className="text-3xl font-black">Atención · vigilancia</h2><p className="mt-2 text-slate-500">Escuche una letra por segundo y pulse únicamente cuando oiga A. Las letras no se muestran. La secuencia contiene 29 letras y 11 letras A.</p><div className="mt-8 flex flex-col items-center"><button onClick={startVigilance} disabled={played.vigilance} className="rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{vigilanceActive?'Secuencia en curso…':played.vigilance?'Secuencia finalizada':'Iniciar secuencia'}</button><button onPointerDown={tapVigilance} disabled={!vigilanceActive} className={`mt-10 h-40 w-40 rounded-full text-3xl font-black text-white shadow-xl transition duration-150 disabled:opacity-40 ${vigilanceTapFeedback ? 'scale-90 bg-green-600 ring-8 ring-green-200' : 'scale-100 bg-red-600'}`}>A</button><p className={`mt-3 h-6 text-sm font-bold ${vigilanceTapFeedback ? 'text-green-700' : 'text-transparent'}`}>Pulsación registrada</p><p className="mt-6 text-sm text-slate-400">Elemento {vigilanceIndex >= 0 ? vigilanceIndex + 1 : 0} de {LETTER_SEQUENCE.length}</p></div><NextStepButton themeClass={theme} onClick={next} disabled={vigilanceActive || !played.vigilance}/></div>}
 
-      {step === 9 && <div><h2 className="text-3xl font-black">Sustracción seriada</h2><p className="mt-2 text-slate-500">Reste mentalmente 7 a partir de {cfg.serialStart}. No use dedos, lápiz, papel o calculadora. Registre cada respuesta sin corregir las anteriores.</p><div className="mt-8 grid gap-4 md:grid-cols-5">{answers.attention.serial7.map((value,index)=><input key={index} type="number" className="rounded-xl border-2 p-4 text-center text-xl font-black" value={value} onChange={(e)=>setAnswers((c)=>{const serial7=[...c.attention.serial7]; serial7[index]=e.target.value; return {...c,attention:{...c.attention,serial7}};})}/>)}</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+      {step === 9 && <div><h2 className="text-3xl font-black">Sustracción seriada</h2><p className="mt-2 text-slate-500">Reste mentalmente 7 a partir de {cfg.serialStart}. No use dedos, lápiz, papel o calculadora. Registre cada respuesta sin corregir las anteriores.</p><div className="mt-6 inline-flex items-center rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3 text-xl font-black text-blue-900"><span>Inicio: {cfg.serialStart}</span><span className="mx-3">−</span><span>7</span><span className="mx-3">=</span><span>respuesta 1</span></div><div className="mt-8 grid gap-4 md:grid-cols-5">{answers.attention.serial7.map((value,index)=><label key={index} className="text-center text-xs font-bold uppercase tracking-wide text-slate-500">Respuesta {index+1}<input type="text" inputMode="numeric" maxLength="3" className="mt-2 w-full rounded-xl border-2 p-4 text-center text-xl font-black" value={value} onChange={(e)=>setAnswers((c)=>{const serial7=[...c.attention.serial7]; serial7[index]=digitsOnly(e.target.value,3); return {...c,attention:{...c.attention,serial7}};})}/></label>)}</div><NextStepButton themeClass={theme} onClick={next} disabled={answers.attention.serial7.some((item)=>!String(item).trim())}/></div>}
 
       {step === 10 && <div><h2 className="text-3xl font-black">Repetición de frases</h2><p className="mt-2 text-slate-500">Cada frase se escucha una sola vez. El participante debe repetirla oralmente cuando termine el audio. El examinador transcribe después de escuchar la respuesta; no es necesario escribir mientras se reproduce la frase.</p>{cfg.sentences.map((sentence,index)=><section key={sentence} className="mt-6 rounded-xl bg-slate-50 p-5"><AudioButton src={publicAsset(`audio/${cfg.folder}/sentence-${index+1}.mp3`)} text={sentence} onceKey={`sentence${index+1}`} played={played[`sentence${index+1}`]} onPlayed={markPlayed} label={`Escuchar frase ${index+1}`} speechRate={0.85}/><textarea className="mt-4 w-full rounded-xl border-2 p-3" rows="3" placeholder="Transcripción literal de la respuesta oral, después de que el participante termine de repetir" value={answers.language[`sentence${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,[`sentence${index+1}`]:toUpper(e.target.value)}}))}/></section>)}<div className="mt-4 rounded-xl bg-fuchsia-50 p-3 text-sm font-bold text-fuchsia-800">Puntaje automático sugerido: {suggestedRepetitionScore(answers, cfg)}/2. La guía exige repetición exacta; la revisión profesional debe confirmar omisiones, adiciones, sustituciones y cambios gramaticales.</div><NextStepButton themeClass={theme} onClick={next} disabled={!played.sentence1 || !played.sentence2}/></div>}
 
-      {step === 11 && <div><h2 className="text-3xl font-black">Fluidez verbal</h2><p className="mt-2 text-slate-500">Sí: el participante debe hablar durante 60 segundos y decir el mayor número posible de palabras que comiencen con <strong>{cfg.fluencyLetter}</strong>. No debe escribir durante el minuto.</p><div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">{answers.consent.audio ? 'La autorización de audio está activa: PANEG intentará grabar únicamente este minuto.' : 'No se autorizó grabación. El examinador deberá escuchar y registrar las palabras manualmente.'}</div>{answers.consent.audio&&<div className="mt-4 rounded-xl border bg-white p-4"><label className="block text-sm font-black">Micrófono de entrada<select className="mt-2 w-full rounded-lg border-2 p-3 font-normal" value={selectedMicId} onChange={(e)=>setSelectedMicId(e.target.value)}><option value="">Predeterminado del sistema</option>{microphones.map((device,index)=><option key={device.deviceId||index} value={device.deviceId}>{device.label||`Micrófono ${index+1}`}</option>)}</select></label><button type="button" onClick={testMicrophone} className="mt-3 rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Probar micrófono durante 4 segundos</button><div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-green-600 transition-all" style={{width:`${micTestLevel}%`}}/></div>{micTestStatus&&<p className="mt-2 text-sm font-bold text-slate-700">{micTestStatus}</p>}</div>}<div className="mt-8 flex flex-col items-center">{!fluencyFinished&&<><Countdown active={fluencyActive} seconds={60} onFinish={finishFluency}/><button type="button" onClick={startFluency} disabled={fluencyActive} className="mt-5 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{fluencyActive?(fluencyRecording?'Grabando y transcribiendo…':'Tiempo en curso…'):'Iniciar 60 segundos'}</button>{fluencyActive&&<div className="mt-4 w-full rounded-xl bg-slate-50 p-4 text-sm"><p className="font-bold">{fluencyRecognitionStatus || 'Esperando reconocimiento de voz…'}</p>{fluencyInterimTranscript&&<p className="mt-2 text-slate-500">{fluencyInterimTranscript}</p>}</div>}</>}{fluencyFinished&&<div className="w-full"><p className="font-bold text-green-700">Tiempo finalizado. PANEG generó una transcripción automática cuando el navegador lo permitió; el investigador debe verificarla contra el audio.</p>{fluencyMicError&&<div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{fluencyMicError}</div>}{fluencyRecognitionStatus&&<div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">{fluencyRecognitionStatus}</div>}{fluencyAudioUrl&&<div className="mt-4 rounded-xl border bg-slate-50 p-4"><audio controls src={fluencyAudioUrl} className="w-full"/><a href={fluencyAudioUrl} download={`PANEG-${phase}-fluidez.webm`} className="mt-3 inline-block font-bold text-blue-700 underline">Descargar grabación local</a><p className="mt-2 text-xs text-slate-500">Este audio existe solo en esta sesión y no se conserva en Firebase. Descárguelo antes de salir si desea conservarlo.</p></div>}<label className="mt-4 block text-sm font-bold text-slate-700">Transcripción automática editable<textarea className="mt-2 w-full rounded-xl border-2 p-4 font-normal" rows="6" placeholder="La transcripción aparecerá aquí. También puede corregirse manualmente." value={answers.language.fluencyTranscript} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,fluencyTranscript:e.target.value}}))}/></label>{(() => { const analysis = analyzeFluencyTranscript(answers.language.fluencyTranscript, cfg.fluencyLetter); return <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950"><p className="font-black">Análisis automático auxiliar</p><p className="mt-2">Candidatas únicas con {cfg.fluencyLetter}: <strong>{analysis.validCandidates.length}</strong> · Punto sugerido: <strong>{analysis.suggestedPoint}/1</strong></p><p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-1"><strong>Demasiado cortas o aisladas:</strong> {analysis.tooShort.length ? analysis.tooShort.join(', ').toUpperCase() : 'NINGUNA'}</p><p className="mt-2 text-xs">Este filtro elimina duplicados, números, elementos de una sola letra y palabras con otra inicial. No determina por sí solo significado, nombre propio ni conjugación verbal; esa validación permanece a cargo del investigador.</p></div>; })()}</div>}</div><NextStepButton themeClass={theme} onClick={next} disabled={!fluencyFinished}/></div>}
+      {step === 11 && (
+        <div>
+          <h2 className="text-3xl font-black">Fluidez verbal</h2>
+          <p className="mt-2 text-slate-500">Sí: el participante debe hablar durante 60 segundos y decir el mayor número posible de palabras que comiencen con <strong>{cfg.fluencyLetter}</strong>. No debe escribir durante el minuto.</p>
+          <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">La autorización de audio está activa: PANEG grabará este minuto y, cuando el navegador lo permita, transcribirá simultáneamente voz a texto.</div>
+
+          {answers.consent.audio && (
+            <div className="mt-4 rounded-xl border bg-white p-4">
+              <label className="block text-sm font-black">
+                Micrófono de entrada
+                <select className="mt-2 w-full rounded-lg border-2 p-3 font-normal" value={selectedMicId} onChange={(e) => setSelectedMicId(e.target.value)}>
+                  <option value="">Predeterminado del sistema</option>
+                  {microphones.map((device, index) => (
+                    <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Micrófono ${index + 1}`}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={testMicrophone} className="mt-3 rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Probar micrófono durante 4 segundos</button>
+              <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-green-600 transition-all" style={{ width: `${micTestLevel}%` }} /></div>
+              {micTestStatus && <p className="mt-2 text-sm font-bold text-slate-700">{micTestStatus}</p>}
+            </div>
+          )}
+
+          <div className="mt-8 flex flex-col items-center">
+            {!fluencyFinished && (
+              <>
+                <Countdown active={fluencyActive} seconds={60} onFinish={finishFluency} />
+                <button type="button" onClick={startFluency} disabled={fluencyActive} className="mt-5 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">
+                  {fluencyActive ? (fluencyRecording ? 'Grabando y transcribiendo…' : 'Tiempo en curso…') : 'Iniciar 60 segundos'}
+                </button>
+                {fluencyActive && (
+                  <div className="mt-4 w-full rounded-xl bg-slate-50 p-4 text-sm">
+                    <p className="font-bold">{fluencyRecognitionStatus || 'Esperando reconocimiento de voz…'}</p>
+                    {fluencyInterimTranscript && <p className="mt-2 text-slate-500">En curso: {fluencyInterimTranscript}</p>}
+                    <div className="mt-3 rounded-xl border bg-white p-3">
+                      <p className="text-xs font-black uppercase text-slate-500">Palabras escuchadas hasta ahora</p>
+                      <p className="mt-2 whitespace-pre-wrap text-slate-800">{answers.language.fluencyTranscript || fluencyInterimTranscript || 'Aún no hay transcripción.'}</p>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {fluencyFinished && (
+              <div className="w-full">
+                <p className="font-bold text-green-700">Tiempo finalizado. PANEG generó una transcripción automática cuando el navegador lo permitió; el investigador debe verificarla contra el audio.</p>
+                {fluencyMicError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{fluencyMicError}</div>}
+                {fluencyRecognitionStatus && <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">{fluencyRecognitionStatus}</div>}
+                {fluencyAudioUrl && (
+                  <div className="mt-4 rounded-xl border bg-slate-50 p-4">
+                    <audio controls src={fluencyAudioUrl} className="w-full" />
+                    <a href={fluencyAudioUrl} download={`PANEG-${phase}-fluidez.webm`} className="mt-3 inline-block font-bold text-blue-700 underline">Descargar grabación local</a>
+                    <p className="mt-2 text-xs text-slate-500">Si el audio pesa menos de {Math.round(MAX_FLUENCY_AUDIO_BYTES / 1024)} KB, PANEG también lo conserva dentro del registro para revisión del investigador.</p>
+                  </div>
+                )}
+                <label className="mt-4 block text-sm font-bold text-slate-700">
+                  Palabras escuchadas / transcripción editable
+                  <textarea className="mt-2 w-full rounded-xl border-2 p-4 font-normal uppercase" rows="6" placeholder="La transcripción aparecerá aquí. También puede corregirse manualmente." value={answers.language.fluencyTranscript} onChange={(e) => setAnswers((c) => ({ ...c, language: { ...c.language, fluencyTranscript: toUpper(e.target.value) } }))} />
+                </label>
+                {(() => {
+                  const analysis = analyzeFluencyTranscript(answers.language.fluencyTranscript, cfg.fluencyLetter);
+                  return (
+                    <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950">
+                      <p className="font-black">Análisis automático auxiliar</p>
+                      <p className="mt-2">Candidatas únicas con {cfg.fluencyLetter}: <strong>{analysis.validCandidates.length}</strong> · Punto sugerido: <strong>{analysis.suggestedPoint}/1</strong></p>
+                      <p className="mt-1"><strong>Válidas por forma:</strong> {analysis.validCandidates.length ? analysis.validCandidates.join(', ').toUpperCase() : 'NINGUNA'}</p>
+                      <p className="mt-1"><strong>Repetidas:</strong> {analysis.repeated.length ? analysis.repeated.join(', ').toUpperCase() : 'NINGUNA'}</p>
+                      <p className="mt-1"><strong>Otra inicial:</strong> {analysis.wrongInitial.length ? analysis.wrongInitial.join(', ').toUpperCase() : 'NINGUNA'}</p>
+                      <p className="mt-1"><strong>Demasiado cortas o aisladas:</strong> {analysis.tooShort.length ? analysis.tooShort.join(', ').toUpperCase() : 'NINGUNA'}</p>
+                      <p className="mt-2 text-xs">Este filtro elimina duplicados, números, elementos de una sola letra y palabras con otra inicial. No determina por sí solo significado, nombre propio ni conjugación verbal; esa validación permanece a cargo del investigador.</p>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+          <NextStepButton themeClass={theme} onClick={next} disabled={!fluencyFinished} />
+        </div>
+      )}
 
       {step === 12 && <div><h2 className="text-3xl font-black">Abstracción</h2><p className="mt-2 text-slate-500">La respuesta no tiene que ser una sola palabra. Debe expresar la categoría o relación común entre los dos elementos.</p><div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-5"><p className="font-bold">Ejemplo: naranja y plátano</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta" value={answers.abstraction.example} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,example:toUpper(e.target.value)}}))}/><label className="mt-3 flex gap-2"><input type="checkbox" checked={answers.abstraction.promptUsed} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,promptUsed:e.target.checked}}))}/><span>Se utilizó la única pista permitida en esta sección.</span></label></div>{cfg.abstractionPairs.map((pair,index)=><div key={pair.join('-')} className="mt-5 rounded-xl bg-slate-50 p-5"><p className="font-black">{pair[0]} – {pair[1]}</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.abstraction[`pair${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,[`pair${index+1}`]:toUpper(e.target.value)}}))}/></div>)}<div className="mt-4 rounded-xl bg-cyan-50 p-3 text-sm font-bold text-cyan-800">Puntaje automático sugerido: {suggestedAbstractionScore(answers, cfg)}/2. La revisión profesional debe confirmar respuestas equivalentes no incluidas literalmente.</div><NextStepButton themeClass={theme} onClick={()=>{setAnswers((c)=>({...c,administration:{...c.administration,delayedRecallStartedAt:Date.now()}}));next();}}/></div>}
 
       {step === 13 && <div><h2 className="text-3xl font-black">Recuerdo diferido</h2><p className="mt-2 text-slate-500">Primero registre únicamente las palabras recordadas espontáneamente, sin pistas.</p><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.delayedRecall.free.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" value={value} onChange={(e)=>setAnswers((c)=>{const free=[...c.delayedRecall.free];free[index]=toUpper(e.target.value);return {...c,delayedRecall:{...c.delayedRecall,free}};})}/>)}</div><div className="mt-8 space-y-4">{cfg.words.map((word)=>{const freeFound=answers.delayedRecall.free.map(normalize).includes(normalize(word)); if(freeFound)return null; return <div key={word} className="rounded-xl border border-orange-200 bg-orange-50 p-4"><p className="font-bold">Pista de categoría: {cfg.categoryCues[word]}</p><input className="mt-2 w-full rounded-lg border-2 p-2" placeholder="Respuesta con pista" value={answers.delayedRecall.category[word]||''} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,category:{...c.delayedRecall.category,[word]:toUpper(e.target.value)}}}))}/>{normalize(answers.delayedRecall.category[word])!==normalize(word)&&<div className="mt-3"><p className="text-sm font-bold">Elección múltiple</p><div className="mt-2 flex flex-wrap gap-2">{cfg.multipleChoice[word].map((option)=><label key={option} className="rounded-lg border bg-white px-3 py-2"><input type="radio" name={`choice-${word}`} value={option} checked={normalize(answers.delayedRecall.multipleChoice[word])===normalize(option)} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,multipleChoice:{...c.delayedRecall.multipleChoice,[word]:toUpper(e.target.value)}}}))}/> <span className="ml-1 uppercase">{option}</span></label>)}</div></div>}</div>})}</div><NextStepButton themeClass={theme} onClick={next}/></div>}
 
-      {step === 14 && <div><h2 className="text-3xl font-black">Orientación</h2><p className="mt-2 text-slate-500">Registre por separado día del mes, mes, año, día de la semana, lugar y ciudad. La guía asigna un punto independiente a cada componente; separarlos evita que un calendario revele la respuesta y permite calificar 0–6 correctamente.</p><div className="mt-6 grid gap-4 md:grid-cols-2">{[['day','Día del mes'],['month','Mes'],['year','Año'],['weekday','Día de la semana'],['place','Lugar exacto'],['city','Ciudad/localidad']].map(([key,label])=><input key={key} className="rounded-xl border-2 p-4" placeholder={label} value={answers.orientation[key]} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,[key]:e.target.value}}))}/>)}</div>{saveError&&<p className="mt-5 rounded-xl bg-red-50 p-4 font-bold text-red-700">{saveError}</p>}<NextStepButton themeClass={theme} onClick={saveResult} disabled={saving || !authReady}>{saving?'Guardando…':'Guardar resultados'}</NextStepButton></div>}
+      {step === 14 && <div><h2 className="text-3xl font-black">Orientación</h2><p className="mt-2 text-slate-500">Registre por separado día del mes, mes, año, día de la semana, lugar y ciudad. La guía asigna un punto independiente a cada componente; separarlos evita que un calendario revele la respuesta y permite calificar 0–6 correctamente.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Día del mes" value={answers.orientation.day} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,day:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Mes" value={answers.orientation.month} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,month:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="4" className="rounded-xl border-2 p-4" placeholder="Año" value={answers.orientation.year} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,year:digitsOnly(e.target.value,4)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="DÍA DE LA SEMANA" value={answers.orientation.weekday} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,weekday:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="LUGAR EXACTO" value={answers.orientation.place} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,place:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="CIUDAD/LOCALIDAD" value={answers.orientation.city} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,city:toUpper(e.target.value)}}))}/></div><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">Día, mes y año solo aceptan dígitos. Día de la semana, lugar y ciudad se guardan en mayúsculas.</p>{saveError&&<p className="mt-5 rounded-xl bg-red-50 p-4 font-bold text-red-700">{saveError}</p>}<NextStepButton themeClass={theme} onClick={saveResult} disabled={saving || !authReady || !answers.orientation.day || !answers.orientation.month || !answers.orientation.year || !answers.orientation.weekday || !answers.orientation.place || !answers.orientation.city}>{saving?'Guardando…':'Guardar resultados'}</NextStepButton></div>}
 
       {step === 15 && <div className="py-14 text-center"><div className={`mx-auto flex h-24 w-24 items-center justify-center rounded-full text-5xl text-white ${cfg.theme==='blue'?'bg-blue-600':'bg-teal-600'}`}>✓</div><h2 className="mt-6 text-3xl font-black">Evaluación registrada</h2><p className="mt-3 text-slate-600">El resultado queda pendiente de revisión profesional antes de calcular el puntaje final.</p>{saveMessage&&<p className="mx-auto mt-5 max-w-lg rounded-xl bg-green-50 p-4 font-bold text-green-700">{saveMessage}</p>}<button onClick={()=>setScreen('home')} className="mt-8 rounded-xl bg-slate-800 px-8 py-3 font-black text-white">Volver al inicio</button></div>}
     </PageCard></div>
