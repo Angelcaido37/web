@@ -1,0 +1,11 @@
+
+# Dependencias
+node_modules/
+**/node_modules/
+
+# Cache de Vite
+.vite/
+**/.vite/
+
+# Logs
+npm-debug.log*
