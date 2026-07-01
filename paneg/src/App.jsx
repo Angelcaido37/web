@@ -56,6 +56,9 @@ const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
 const appId = 'paneg-bd';
 const RESULTS_PATH = ['artifacts', appId, 'data', 'moca_results', 'results'];
+const PROTOCOL_PROFILES_PATH = ['artifacts', appId, 'data', 'paneg_protocol', 'profiles'];
+const PROTOCOL_EXPOSURE_LOGS_PATH = ['artifacts', appId, 'data', 'paneg_protocol', 'exposure_logs'];
+const PROTOCOL_INTERVIEWS_PATH = ['artifacts', appId, 'data', 'paneg_protocol', 'interviews'];
 const SETTINGS_DOC_PATH = ['artifacts', appId, 'data', 'settings'];
 const DEFAULT_EVALUATOR_PASSWORD = 'paneg2025';
 const PASSWORD_HASH_STORAGE_KEY = 'paneg.evaluatorPasswordHash';
@@ -1281,6 +1284,318 @@ function ProtocolCompliancePanel({ results }) {
   );
 }
 
+
+const PROTOCOL_TOOL_OPTIONS = ['ChatGPT', 'Claude', 'Gemini', 'Copilot', 'Perplexity', 'DALL-E / imagen', 'Otra'];
+const PROTOCOL_TASK_OPTIONS = ['Búsqueda y síntesis', 'Redacción', 'Programación', 'Análisis de datos', 'Diseño didáctico', 'Resolución de problemas', 'Creatividad / lluvia de ideas', 'Otra'];
+const PROTOCOL_FREQUENCY_OPTIONS = ['Nunca', 'Menos de una vez por semana', '1-2 días por semana', '3-4 días por semana', '5 o más días por semana', 'Diario'];
+const PROTOCOL_TECH_USE_OPTIONS = ['Bajo', 'Medio', 'Alto', 'Muy alto'];
+const PROTOCOL_ASSIGNED_DURATIONS = ['30', '45'];
+
+const defaultProtocolProfile = {
+  participantName: '', participantCode: '', group: 'Experimental (Uso de IAGen)', age: '', sex: '', educationYears: '',
+  adult18: false, basicEducation: false, internetAccess: false, informedConsent: false,
+  noModerateSevereCognitiveDx: false, noUncontrolledNeuroPsych: false, canComplyExposure: false,
+  priorIAExperience: 'Ninguna', technologyUseFrequency: '', digitalHabits: '', chatgptFamiliarity: '1', toolsUsed: [], tasksIA: [],
+  baselinePerception: '', selfEfficacyIA: '1', privacyConcern: '1', notes: '', matchedPairId: '',
+};
+
+const defaultExposureLog = {
+  participantName: '', participantCode: '', group: 'Experimental (Uso de IAGen)', date: '', week: '1', sessionNumber: '1',
+  assignedDuration: '30', actualDurationMinutes: '', frequencyThisWeek: '', toolName: 'ChatGPT', toolType: 'Texto',
+  activityType: 'Búsqueda y síntesis', completed: 'Sí', selfReport: '', evidenceNote: '', observations: '',
+};
+
+const defaultInterview = {
+  participantName: '', participantCode: '', date: '', phase: 'Postest', interviewer: '', transcript: '', codes: '', categories: '', analyticNotes: '',
+};
+
+const protocolKey = (record = {}) => normalize(record.participantCode || record.participantName || record.name || record.participant?.name || record.consent?.participantName || '');
+
+const profileEligible = (profile = {}) => Boolean(
+  profile.adult18 && profile.basicEducation && profile.internetAccess && profile.informedConsent &&
+  profile.noModerateSevereCognitiveDx && profile.noUncontrolledNeuroPsych && profile.canComplyExposure
+);
+
+const splitList = (value = '') => String(value || '').split(/[;,\n]/).map((item) => item.trim()).filter(Boolean);
+const csvEscape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+const downloadCsv = (filename, header, rows) => {
+  const csv = [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const summarizeExposureForKey = (logs = [], key = '') => {
+  const filtered = logs.filter((item) => protocolKey(item) === key);
+  const totalMinutes = filtered.reduce((sum, item) => sum + Number(item.actualDurationMinutes || 0), 0);
+  const assignedTotal = filtered.reduce((sum, item) => sum + Number(item.assignedDuration || 0), 0);
+  const completed = filtered.filter((item) => item.completed === 'Sí').length;
+  const partial = filtered.filter((item) => item.completed === 'Parcial').length;
+  const compliancePct = assignedTotal ? Math.round((totalMinutes / assignedTotal) * 100) : '';
+  const tools = Array.from(new Set(filtered.map((item) => item.toolName).filter(Boolean))).join('; ');
+  const tasks = Array.from(new Set(filtered.map((item) => item.activityType).filter(Boolean))).join('; ');
+  return { sessions: filtered.length, totalMinutes, assignedTotal, averageMinutes: filtered.length ? Math.round(totalMinutes / filtered.length) : '', completed, partial, compliancePct, tools, tasks };
+};
+
+const domainScore = (record, key) => {
+  const item = (record?.domainScores || []).find((domain) => domain.key === key);
+  return item ? Number(item.score) : '';
+};
+
+const buildProtocolTriangulationRows = ({ results = [], profiles = [], exposureLogs = [], interviews = [] }) => {
+  const summaries = buildParticipantSummaries(results);
+  const keys = new Map();
+  summaries.forEach((item) => keys.set(normalize(item.name), { key: normalize(item.name), name: item.name, summary: item }));
+  profiles.forEach((item) => {
+    const key = protocolKey(item);
+    if (!key) return;
+    keys.set(key, { ...(keys.get(key) || { key, name: item.participantName || item.participantCode }), profile: item, name: item.participantName || keys.get(key)?.name || item.participantCode });
+  });
+  exposureLogs.forEach((item) => {
+    const key = protocolKey(item);
+    if (!key) return;
+    keys.set(key, { ...(keys.get(key) || { key, name: item.participantName || item.participantCode }), name: item.participantName || keys.get(key)?.name || item.participantCode });
+  });
+  interviews.forEach((item) => {
+    const key = protocolKey(item);
+    if (!key) return;
+    keys.set(key, { ...(keys.get(key) || { key, name: item.participantName || item.participantCode }), name: item.participantName || keys.get(key)?.name || item.participantCode });
+  });
+  return Array.from(keys.values()).map((entry) => {
+    const key = entry.key;
+    const profile = entry.profile || profiles.find((item) => protocolKey(item) === key) || {};
+    const summary = entry.summary || summaries.find((item) => normalize(item.name) === key) || {};
+    const exposure = summarizeExposureForKey(exposureLogs, key);
+    const personInterviews = interviews.filter((item) => protocolKey(item) === key);
+    const categories = Array.from(new Set(personInterviews.flatMap((item) => splitList(item.categories)))).join('; ');
+    const codes = Array.from(new Set(personInterviews.flatMap((item) => splitList(item.codes)))).join('; ');
+    const pre = summary.pre || null;
+    const post = summary.post || null;
+    return {
+      key,
+      participantName: entry.name || profile.participantName || summary.name || '',
+      group: profile.group || summary.latest?.participant?.group || '',
+      age: profile.age || summary.latest?.participant?.age || '',
+      sex: profile.sex || summary.latest?.participant?.sex || '',
+      educationYears: profile.educationYears || summary.latest?.participant?.educationYears || '',
+      eligible: profile.id ? (profileEligible(profile) ? 'Sí' : 'No') : '',
+      priorIAExperience: profile.priorIAExperience || '',
+      technologyUseFrequency: profile.technologyUseFrequency || '',
+      chatgptFamiliarity: profile.chatgptFamiliarity || '',
+      toolsUsed: Array.isArray(profile.toolsUsed) ? profile.toolsUsed.join('; ') : '',
+      tasksIA: Array.isArray(profile.tasksIA) ? profile.tasksIA.join('; ') : '',
+      exposureSessions: exposure.sessions,
+      exposureTotalMinutes: exposure.totalMinutes,
+      exposureAverageMinutes: exposure.averageMinutes,
+      exposureCompliancePct: exposure.compliancePct,
+      exposureTools: exposure.tools,
+      exposureTasks: exposure.tasks,
+      preTotal: summary.preTotal ?? '',
+      postTotal: summary.postTotal ?? '',
+      deltaTotal: summary.delta ?? '',
+      preAttention: domainScore(pre, 'attention'),
+      postAttention: domainScore(post, 'attention'),
+      preMemory: domainScore(pre, 'memory'),
+      postMemory: domainScore(post, 'memory'),
+      preExecutive: domainScore(pre, 'visuospatial'),
+      postExecutive: domainScore(post, 'visuospatial'),
+      interviewCount: personInterviews.length,
+      interviewCodes: codes,
+      interviewCategories: categories,
+    };
+  }).sort((a, b) => String(a.participantName).localeCompare(String(b.participantName), 'es'));
+};
+
+function CheckField({ label, checked, onChange }) {
+  return <label className="flex items-start gap-2 rounded-lg border bg-white p-3 text-sm"><input type="checkbox" className="mt-1" checked={!!checked} onChange={(e) => onChange(e.target.checked)} /><span>{label}</span></label>;
+}
+
+function SelectArrayField({ label, options, value = [], onChange }) {
+  const current = Array.isArray(value) ? value : [];
+  const toggle = (option) => {
+    onChange(current.includes(option) ? current.filter((item) => item !== option) : [...current, option]);
+  };
+  return (
+    <div>
+      <p className="text-sm font-black text-slate-700">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {options.map((option) => <button type="button" key={option} onClick={() => toggle(option)} className={`rounded-full border px-3 py-1 text-xs font-black ${current.includes(option) ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>{option}</button>)}
+      </div>
+    </div>
+  );
+}
+
+function ProtocolResearchModule({ results, profiles, exposureLogs, interviews, onSaveProfile, onSaveLog, onSaveInterview, onDeleteProfile, onDeleteLog, onDeleteInterview }) {
+  const [profileForm, setProfileForm] = useState(defaultProtocolProfile);
+  const [logForm, setLogForm] = useState({ ...defaultExposureLog, date: new Date().toISOString().slice(0, 10) });
+  const [interviewForm, setInterviewForm] = useState({ ...defaultInterview, date: new Date().toISOString().slice(0, 10) });
+  const [activeTab, setActiveTab] = useState('perfil');
+  const participantOptions = Array.from(new Set([
+    ...buildParticipantSummaries(results).map((item) => item.name),
+    ...profiles.map((item) => item.participantName),
+    ...exposureLogs.map((item) => item.participantName),
+  ].filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es'));
+  const triRows = buildProtocolTriangulationRows({ results, profiles, exposureLogs, interviews });
+  const eligibleCount = profiles.filter(profileEligible).length;
+  const experimentalLogs = exposureLogs.filter((item) => String(item.group || '').includes('Experimental')).length;
+  const averageCompliance = (() => {
+    const values = triRows.map((row) => Number(row.exposureCompliancePct)).filter(Number.isFinite);
+    return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : '—';
+  })();
+  const saveProfile = async () => {
+    if (!profileForm.participantName.trim()) { alert('Capture el nombre o código del participante.'); return; }
+    await onSaveProfile({ ...profileForm, participantName: toUpper(profileForm.participantName), participantKey: protocolKey(profileForm), eligible: profileEligible(profileForm) });
+    setProfileForm(defaultProtocolProfile);
+  };
+  const saveLog = async () => {
+    if (!logForm.participantName.trim() || !logForm.date || !logForm.actualDurationMinutes) { alert('Capture participante, fecha y duración real.'); return; }
+    await onSaveLog({ ...logForm, participantName: toUpper(logForm.participantName), participantKey: protocolKey(logForm) });
+    setLogForm({ ...defaultExposureLog, date: new Date().toISOString().slice(0, 10) });
+  };
+  const saveInterview = async () => {
+    if (!interviewForm.participantName.trim() || !interviewForm.date || !interviewForm.transcript.trim()) { alert('Capture participante, fecha y transcripción o notas de entrevista.'); return; }
+    await onSaveInterview({ ...interviewForm, participantName: toUpper(interviewForm.participantName), participantKey: protocolKey(interviewForm) });
+    setInterviewForm({ ...defaultInterview, date: new Date().toISOString().slice(0, 10) });
+  };
+  const exportStatisticalCsv = () => {
+    const header = ['participant_key','participante','grupo','edad','sexo','escolaridad','elegible','experiencia_ia_previa','frecuencia_uso_tecnologia','familiaridad_chatgpt','herramientas_ia','tareas_ia','sesiones_exposicion','minutos_totales_exposicion','minutos_promedio_sesion','cumplimiento_porcentaje','herramientas_usadas_bitacora','tareas_bitacora','pre_total','post_total','delta_total','pre_atencion','post_atencion','delta_atencion','pre_memoria','post_memoria','delta_memoria','pre_ejecutivo','post_ejecutivo','delta_ejecutivo','num_entrevistas','codigos_cualitativos','categorias_cualitativas'];
+    const rows = triRows.map((row) => [row.key, row.participantName, row.group, row.age, row.sex, row.educationYears, row.eligible, row.priorIAExperience, row.technologyUseFrequency, row.chatgptFamiliarity, row.toolsUsed, row.tasksIA, row.exposureSessions, row.exposureTotalMinutes, row.exposureAverageMinutes, row.exposureCompliancePct, row.exposureTools, row.exposureTasks, row.preTotal, row.postTotal, row.deltaTotal, row.preAttention, row.postAttention, row.postAttention !== '' && row.preAttention !== '' ? Number(row.postAttention) - Number(row.preAttention) : '', row.preMemory, row.postMemory, row.postMemory !== '' && row.preMemory !== '' ? Number(row.postMemory) - Number(row.preMemory) : '', row.preExecutive, row.postExecutive, row.postExecutive !== '' && row.preExecutive !== '' ? Number(row.postExecutive) - Number(row.preExecutive) : '', row.interviewCount, row.interviewCodes, row.interviewCategories]);
+    downloadCsv(`PANEG_analisis_integrado_${new Date().toISOString().slice(0,10)}.csv`, header, rows);
+  };
+  const exportLogsCsv = () => {
+    const header = ['participante','grupo','fecha','semana','sesion','duracion_asignada','duracion_real','herramienta','tipo_herramienta','actividad','cumplimiento','autoinforme','evidencia','observaciones'];
+    const rows = exposureLogs.map((item) => [item.participantName, item.group, item.date, item.week, item.sessionNumber, item.assignedDuration, item.actualDurationMinutes, item.toolName, item.toolType, item.activityType, item.completed, item.selfReport, item.evidenceNote, item.observations]);
+    downloadCsv(`PANEG_bitacora_IA_${new Date().toISOString().slice(0,10)}.csv`, header, rows);
+  };
+  const tabButton = (id, label) => <button type="button" onClick={() => setActiveTab(id)} className={`rounded-xl px-4 py-2 text-sm font-black ${activeTab === id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>{label}</button>;
+  return (
+    <section className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Módulo de investigación PANEG</p>
+          <h2 className="text-2xl font-black text-slate-900">Variables complementarias, exposición, entrevistas y triangulación</h2>
+          <p className="mt-1 max-w-4xl text-sm text-slate-500">Este módulo no modifica el MoCA. Registra variables necesarias para análisis cuasi-experimental: perfil tecnológico, criterios de inclusión/exclusión, bitácora de exposición a IA, seguimiento 4 a 6 semanas, entrevistas cualitativas y exportación integrada para ANOVA, regresión o análisis mixto.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={exportStatisticalCsv} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-black text-white">Exportar análisis integrado</button>
+          <button type="button" onClick={exportLogsCsv} className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-black text-white">Exportar bitácora</button>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <MetricCard label="Perfiles" value={profiles.length} note={`${eligibleCount} elegibles`} />
+        <MetricCard label="Sesiones IA" value={exposureLogs.length} note={`${experimentalLogs} experimentales`} />
+        <MetricCard label="Cumplimiento" value={averageCompliance === '—' ? '—' : `${averageCompliance}%`} note="Minutos reales/asignados" />
+        <MetricCard label="Entrevistas" value={interviews.length} note="Cualitativo" />
+        <MetricCard label="Triangulados" value={triRows.filter((row) => row.preTotal !== '' || row.postTotal !== '').length} note="Con MoCA" />
+        <MetricCard label="Listos análisis" value={triRows.filter((row) => row.preTotal !== '' && row.postTotal !== '' && row.exposureSessions > 0).length} note="Pre-post + exposición" />
+      </div>
+      <div className="mt-5 flex flex-wrap gap-2">
+        {tabButton('perfil', '1. Perfil y elegibilidad')}
+        {tabButton('bitacora', '2. Bitácora IA')}
+        {tabButton('entrevista', '3. Entrevistas')}
+        {tabButton('triangulacion', '4. Triangulación')}
+      </div>
+      <datalist id="paneg-participants-list">{participantOptions.map((name) => <option key={name} value={name} />)}</datalist>
+      {activeTab === 'perfil' && (
+        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+          <h3 className="text-lg font-black text-slate-900">Encuesta sociodemográfica, hábitos tecnológicos y criterios de inclusión/exclusión</h3>
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <label className="text-sm font-black text-slate-700">Participante<input list="paneg-participants-list" className="mt-1 w-full rounded-xl border-2 p-3 font-normal uppercase" value={profileForm.participantName} onChange={(e) => setProfileForm((c) => ({ ...c, participantName: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Código / emparejamiento<input className="mt-1 w-full rounded-xl border-2 p-3 font-normal uppercase" value={profileForm.participantCode} onChange={(e) => setProfileForm((c) => ({ ...c, participantCode: toUpper(e.target.value) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Condición<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.group} onChange={(e) => setProfileForm((c) => ({ ...c, group: e.target.value }))}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></label>
+            <label className="text-sm font-black text-slate-700">Edad<input type="text" inputMode="numeric" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.age} onChange={(e) => setProfileForm((c) => ({ ...c, age: digitsOnly(e.target.value,3) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Sexo<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.sex} onChange={(e) => setProfileForm((c) => ({ ...c, sex: e.target.value }))}><option value="">Seleccione</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select></label>
+            <label className="text-sm font-black text-slate-700">Escolaridad completa<input type="text" inputMode="numeric" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.educationYears} onChange={(e) => setProfileForm((c) => ({ ...c, educationYears: digitsOnly(e.target.value,2) }))} /></label>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <CheckField label="Tiene 18 años o más" checked={profileForm.adult18} onChange={(value) => setProfileForm((c) => ({ ...c, adult18: value }))} />
+            <CheckField label="Escolaridad básica terminada" checked={profileForm.basicEducation} onChange={(value) => setProfileForm((c) => ({ ...c, basicEducation: value }))} />
+            <CheckField label="Cuenta con dispositivo e internet" checked={profileForm.internetAccess} onChange={(value) => setProfileForm((c) => ({ ...c, internetAccess: value }))} />
+            <CheckField label="Consentimiento informado firmado/aceptado" checked={profileForm.informedConsent} onChange={(value) => setProfileForm((c) => ({ ...c, informedConsent: value }))} />
+            <CheckField label="Sin diagnóstico de deterioro cognitivo moderado/severo reportado" checked={profileForm.noModerateSevereCognitiveDx} onChange={(value) => setProfileForm((c) => ({ ...c, noModerateSevereCognitiveDx: value }))} />
+            <CheckField label="Sin condición neurológica/psiquiátrica activa no controlada reportada" checked={profileForm.noUncontrolledNeuroPsych} onChange={(value) => setProfileForm((c) => ({ ...c, noUncontrolledNeuroPsych: value }))} />
+            <CheckField label="Puede cumplir la exposición pautada" checked={profileForm.canComplyExposure} onChange={(value) => setProfileForm((c) => ({ ...c, canComplyExposure: value }))} />
+          </div>
+          <div className={`mt-4 rounded-xl p-3 text-sm font-black ${profileEligible(profileForm) ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>{profileEligible(profileForm) ? 'Participante elegible según checklist.' : 'Checklist incompleto o con criterios no cumplidos.'}</div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <label className="text-sm font-black text-slate-700">Experiencia previa con IA<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.priorIAExperience} onChange={(e) => setProfileForm((c) => ({ ...c, priorIAExperience: e.target.value }))}><option>Ninguna</option><option>Ocasional</option><option>Frecuente</option><option>Avanzada</option></select></label>
+            <label className="text-sm font-black text-slate-700">Frecuencia de uso tecnológico<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.technologyUseFrequency} onChange={(e) => setProfileForm((c) => ({ ...c, technologyUseFrequency: e.target.value }))}><option value="">Seleccione</option>{PROTOCOL_TECH_USE_OPTIONS.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="text-sm font-black text-slate-700">Familiaridad con ChatGPT / IA 1-5<input type="text" inputMode="numeric" maxLength="1" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.chatgptFamiliarity} onChange={(e) => setProfileForm((c) => ({ ...c, chatgptFamiliarity: digitsOnly(e.target.value,1) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Autoeficacia IA 1-5<input type="text" inputMode="numeric" maxLength="1" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={profileForm.selfEfficacyIA} onChange={(e) => setProfileForm((c) => ({ ...c, selfEfficacyIA: digitsOnly(e.target.value,1) }))} /></label>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <SelectArrayField label="Herramientas que usa o conoce" options={PROTOCOL_TOOL_OPTIONS} value={profileForm.toolsUsed} onChange={(value) => setProfileForm((c) => ({ ...c, toolsUsed: value }))} />
+            <SelectArrayField label="Tipo de tareas en que usa IA" options={PROTOCOL_TASK_OPTIONS} value={profileForm.tasksIA} onChange={(value) => setProfileForm((c) => ({ ...c, tasksIA: value }))} />
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="text-sm font-black text-slate-700">Hábitos digitales<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={profileForm.digitalHabits} onChange={(e) => setProfileForm((c) => ({ ...c, digitalHabits: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Percepción inicial sobre IA<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={profileForm.baselinePerception} onChange={(e) => setProfileForm((c) => ({ ...c, baselinePerception: e.target.value }))} /></label>
+          </div>
+          <button type="button" onClick={saveProfile} className="mt-4 rounded-xl bg-violet-700 px-5 py-3 font-black text-white">Guardar perfil / checklist</button>
+          <div className="mt-5 max-h-64 overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-slate-100"><tr><th className="p-2">Participante</th><th>Grupo</th><th>Elegible</th><th>Experiencia IA</th><th>Familiaridad</th><th>Herramientas</th><th>Acción</th></tr></thead><tbody>{profiles.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.participantName}</td><td>{item.group}</td><td>{profileEligible(item) ? 'Sí' : 'No'}</td><td>{item.priorIAExperience}</td><td>{item.chatgptFamiliarity}</td><td>{Array.isArray(item.toolsUsed) ? item.toolsUsed.join(', ') : ''}</td><td><button type="button" onClick={() => onDeleteProfile(item.id)} className="rounded bg-red-600 px-2 py-1 font-bold text-white">Eliminar</button></td></tr>)}</tbody></table></div>
+        </div>
+      )}
+      {activeTab === 'bitacora' && (
+        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+          <h3 className="text-lg font-black text-slate-900">Bitácora de exposición controlada a IA Generativa</h3>
+          <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
+            <label className="text-sm font-black text-slate-700">Participante<input list="paneg-participants-list" className="mt-1 w-full rounded-xl border-2 p-3 font-normal uppercase" value={logForm.participantName} onChange={(e) => setLogForm((c) => ({ ...c, participantName: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Fecha<input type="date" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.date} onChange={(e) => setLogForm((c) => ({ ...c, date: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Semana<input type="text" inputMode="numeric" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.week} onChange={(e) => setLogForm((c) => ({ ...c, week: digitsOnly(e.target.value,2) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Sesión<input type="text" inputMode="numeric" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.sessionNumber} onChange={(e) => setLogForm((c) => ({ ...c, sessionNumber: digitsOnly(e.target.value,3) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Duración asignada<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.assignedDuration} onChange={(e) => setLogForm((c) => ({ ...c, assignedDuration: e.target.value }))}>{PROTOCOL_ASSIGNED_DURATIONS.map((item) => <option key={item} value={item}>{item} minutos</option>)}</select></label>
+            <label className="text-sm font-black text-slate-700">Duración real<input type="text" inputMode="numeric" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.actualDurationMinutes} onChange={(e) => setLogForm((c) => ({ ...c, actualDurationMinutes: digitsOnly(e.target.value,3) }))} /></label>
+            <label className="text-sm font-black text-slate-700">Herramienta<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.toolName} onChange={(e) => setLogForm((c) => ({ ...c, toolName: e.target.value }))}>{PROTOCOL_TOOL_OPTIONS.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="text-sm font-black text-slate-700">Actividad<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.activityType} onChange={(e) => setLogForm((c) => ({ ...c, activityType: e.target.value }))}>{PROTOCOL_TASK_OPTIONS.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="text-sm font-black text-slate-700">Cumplimiento<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={logForm.completed} onChange={(e) => setLogForm((c) => ({ ...c, completed: e.target.value }))}><option>Sí</option><option>Parcial</option><option>No</option></select></label>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <label className="text-sm font-black text-slate-700">Autoinforme<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={logForm.selfReport} onChange={(e) => setLogForm((c) => ({ ...c, selfReport: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Evidencia / referencia<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={logForm.evidenceNote} onChange={(e) => setLogForm((c) => ({ ...c, evidenceNote: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Observaciones<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={logForm.observations} onChange={(e) => setLogForm((c) => ({ ...c, observations: e.target.value }))} /></label>
+          </div>
+          <button type="button" onClick={saveLog} className="mt-4 rounded-xl bg-blue-700 px-5 py-3 font-black text-white">Guardar sesión de bitácora</button>
+          <div className="mt-5 max-h-72 overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[1000px] text-left text-xs"><thead className="bg-slate-100"><tr><th className="p-2">Participante</th><th>Fecha</th><th>Semana</th><th>Duración</th><th>Herramienta</th><th>Actividad</th><th>Cumplimiento</th><th>Acción</th></tr></thead><tbody>{exposureLogs.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.participantName}</td><td>{item.date}</td><td>{item.week}</td><td>{item.actualDurationMinutes}/{item.assignedDuration}</td><td>{item.toolName}</td><td>{item.activityType}</td><td>{item.completed}</td><td><button type="button" onClick={() => onDeleteLog(item.id)} className="rounded bg-red-600 px-2 py-1 font-bold text-white">Eliminar</button></td></tr>)}</tbody></table></div>
+        </div>
+      )}
+      {activeTab === 'entrevista' && (
+        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+          <h3 className="text-lg font-black text-slate-900">Módulo de entrevistas cualitativas</h3>
+          <div className="mt-4 grid gap-4 md:grid-cols-4">
+            <label className="text-sm font-black text-slate-700">Participante<input list="paneg-participants-list" className="mt-1 w-full rounded-xl border-2 p-3 font-normal uppercase" value={interviewForm.participantName} onChange={(e) => setInterviewForm((c) => ({ ...c, participantName: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Fecha<input type="date" className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={interviewForm.date} onChange={(e) => setInterviewForm((c) => ({ ...c, date: e.target.value }))} /></label>
+            <label className="text-sm font-black text-slate-700">Momento<select className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={interviewForm.phase} onChange={(e) => setInterviewForm((c) => ({ ...c, phase: e.target.value }))}><option>Pretest</option><option>Intermedia</option><option>Postest</option><option>Seguimiento</option></select></label>
+            <label className="text-sm font-black text-slate-700">Entrevistador<input className="mt-1 w-full rounded-xl border-2 p-3 font-normal" value={interviewForm.interviewer} onChange={(e) => setInterviewForm((c) => ({ ...c, interviewer: e.target.value }))} /></label>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="text-sm font-black text-slate-700">Transcripción / relato<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="7" value={interviewForm.transcript} onChange={(e) => setInterviewForm((c) => ({ ...c, transcript: e.target.value }))} /></label>
+            <div className="space-y-4">
+              <label className="block text-sm font-black text-slate-700">Códigos temáticos<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" placeholder="fatiga mental; dependencia; productividad" value={interviewForm.codes} onChange={(e) => setInterviewForm((c) => ({ ...c, codes: e.target.value }))} /></label>
+              <label className="block text-sm font-black text-slate-700">Categorías<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" placeholder="beneficios percibidos; riesgos; autorregulación" value={interviewForm.categories} onChange={(e) => setInterviewForm((c) => ({ ...c, categories: e.target.value }))} /></label>
+              <label className="block text-sm font-black text-slate-700">Notas analíticas<textarea className="mt-1 w-full rounded-xl border-2 p-3 font-normal" rows="3" value={interviewForm.analyticNotes} onChange={(e) => setInterviewForm((c) => ({ ...c, analyticNotes: e.target.value }))} /></label>
+            </div>
+          </div>
+          <button type="button" onClick={saveInterview} className="mt-4 rounded-xl bg-emerald-700 px-5 py-3 font-black text-white">Guardar entrevista</button>
+          <div className="mt-5 max-h-72 overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-slate-100"><tr><th className="p-2">Participante</th><th>Fecha</th><th>Momento</th><th>Códigos</th><th>Categorías</th><th>Acción</th></tr></thead><tbody>{interviews.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.participantName}</td><td>{item.date}</td><td>{item.phase}</td><td>{item.codes}</td><td>{item.categories}</td><td><button type="button" onClick={() => onDeleteInterview(item.id)} className="rounded bg-red-600 px-2 py-1 font-bold text-white">Eliminar</button></td></tr>)}</tbody></table></div>
+        </div>
+      )}
+      {activeTab === 'triangulacion' && (
+        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+          <h3 className="text-lg font-black text-slate-900">Triangulación: MoCA + exposición IA + entrevista</h3>
+          <p className="mt-1 text-sm text-slate-500">La tabla une por nombre/código normalizado. Para análisis formal, use el mismo identificador de participante en MoCA, perfil, bitácora y entrevista.</p>
+          <div className="mt-4 max-h-[520px] overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[1500px] text-left text-xs"><thead className="sticky top-0 bg-slate-100"><tr><th className="p-2">Participante</th><th>Grupo</th><th>Elegible</th><th>Exp. IA previa</th><th>Sesiones</th><th>Minutos</th><th>Cumplimiento</th><th>Pre</th><th>Post</th><th>Δ total</th><th>Atención pre/post</th><th>Memoria pre/post</th><th>Ejecutivo pre/post</th><th>Entrevistas</th><th>Categorías</th></tr></thead><tbody>{triRows.map((row) => <tr key={row.key} className="border-t"><td className="p-2 font-bold">{row.participantName}</td><td>{row.group}</td><td>{row.eligible}</td><td>{row.priorIAExperience}</td><td>{row.exposureSessions}</td><td>{row.exposureTotalMinutes}</td><td>{row.exposureCompliancePct === '' ? '—' : `${row.exposureCompliancePct}%`}</td><td>{row.preTotal}</td><td>{row.postTotal}</td><td className={Number(row.deltaTotal) > 0 ? 'font-black text-green-700' : Number(row.deltaTotal) < 0 ? 'font-black text-red-700' : 'font-bold'}>{row.deltaTotal}</td><td>{row.preAttention}/{row.postAttention}</td><td>{row.preMemory}/{row.postMemory}</td><td>{row.preExecutive}/{row.postExecutive}</td><td>{row.interviewCount}</td><td>{row.interviewCategories}</td></tr>)}</tbody></table></div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PowerBIResultsDashboard({ results, onOpenResults }) {
   const summaries = buildParticipantSummaries(results);
   const completed = results.filter((record) => record.finalScore?.complete && Number.isFinite(Number(record.finalScore.total)));
@@ -1468,6 +1783,9 @@ export default function App() {
   const [passwordChangeError, setPasswordChangeError] = useState('');
   const [passwordChanging, setPasswordChanging] = useState(false);
   const [results, setResults] = useState([]);
+  const [protocolProfiles, setProtocolProfiles] = useState([]);
+  const [protocolExposureLogs, setProtocolExposureLogs] = useState([]);
+  const [protocolInterviews, setProtocolInterviews] = useState([]);
   const [selected, setSelected] = useState(null);
   const [selectedAnalysis, setSelectedAnalysis] = useState(null);
   const [manual, setManual] = useState({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 });
@@ -1503,6 +1821,26 @@ export default function App() {
       rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       setResults(rows);
     });
+  }, [evaluatorUnlocked, user]);
+
+  useEffect(() => {
+    if (!evaluatorUnlocked || !user) return undefined;
+    const unsubProfiles = onSnapshot(collection(db, ...PROTOCOL_PROFILES_PATH), (snapshot) => {
+      const rows = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+      setProtocolProfiles(rows);
+    });
+    const unsubLogs = onSnapshot(collection(db, ...PROTOCOL_EXPOSURE_LOGS_PATH), (snapshot) => {
+      const rows = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || Number(b.createdAt || 0) - Number(a.createdAt || 0));
+      setProtocolExposureLogs(rows);
+    });
+    const unsubInterviews = onSnapshot(collection(db, ...PROTOCOL_INTERVIEWS_PATH), (snapshot) => {
+      const rows = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || Number(b.createdAt || 0) - Number(a.createdAt || 0));
+      setProtocolInterviews(rows);
+    });
+    return () => { unsubProfiles(); unsubLogs(); unsubInterviews(); };
   }, [evaluatorUnlocked, user]);
 
 
@@ -2025,6 +2363,36 @@ export default function App() {
     setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, domainScores: domains, analyticSummary, professionalReview: fluencyValidation, status: 'Revisado por evaluador' }) : current);
   };
 
+  const saveProtocolProfile = async (payload) => {
+    if (!user || !authReady) { alert('No hay conexión autenticada con Firebase.'); return; }
+    await addDoc(collection(db, ...PROTOCOL_PROFILES_PATH), cleanFirestore({ ...payload, createdAt: Date.now(), uid: user.uid, module: 'profile_tech_screening' }));
+  };
+
+  const saveProtocolExposureLog = async (payload) => {
+    if (!user || !authReady) { alert('No hay conexión autenticada con Firebase.'); return; }
+    await addDoc(collection(db, ...PROTOCOL_EXPOSURE_LOGS_PATH), cleanFirestore({ ...payload, createdAt: Date.now(), uid: user.uid, module: 'ia_exposure_log' }));
+  };
+
+  const saveProtocolInterview = async (payload) => {
+    if (!user || !authReady) { alert('No hay conexión autenticada con Firebase.'); return; }
+    await addDoc(collection(db, ...PROTOCOL_INTERVIEWS_PATH), cleanFirestore({ ...payload, createdAt: Date.now(), uid: user.uid, module: 'qualitative_interview' }));
+  };
+
+  const deleteProtocolProfile = async (id) => {
+    if (!window.confirm('Eliminar este perfil/checklist del protocolo?')) return;
+    await deleteDoc(doc(db, ...PROTOCOL_PROFILES_PATH, id));
+  };
+
+  const deleteProtocolExposureLog = async (id) => {
+    if (!window.confirm('Eliminar esta sesión de bitácora?')) return;
+    await deleteDoc(doc(db, ...PROTOCOL_EXPOSURE_LOGS_PATH, id));
+  };
+
+  const deleteProtocolInterview = async (id) => {
+    if (!window.confirm('Eliminar esta entrevista?')) return;
+    await deleteDoc(doc(db, ...PROTOCOL_INTERVIEWS_PATH, id));
+  };
+
   const openEvaluatorLogin = () => {
     setEvaluatorPassword('');
     setEvaluatorLoginMessage('');
@@ -2309,6 +2677,7 @@ export default function App() {
           </div>
           {renderPasswordDialog()}
           <ProtocolCompliancePanel results={results} />
+          <ProtocolResearchModule results={results} profiles={protocolProfiles} exposureLogs={protocolExposureLogs} interviews={protocolInterviews} onSaveProfile={saveProtocolProfile} onSaveLog={saveProtocolExposureLog} onSaveInterview={saveProtocolInterview} onDeleteProfile={deleteProtocolProfile} onDeleteLog={deleteProtocolExposureLog} onDeleteInterview={deleteProtocolInterview} />
           <div className="grid gap-6 xl:grid-cols-[minmax(860px,1.35fr)_minmax(420px,0.65fr)]">
             <div className="rounded-2xl bg-white shadow">
               <div className="border-b p-4">
