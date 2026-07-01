@@ -221,6 +221,25 @@ const digitsOnly = (value = '', maxLength = null) => {
   const clean = String(value || '').replace(/\D/g, '');
   return maxLength ? clean.slice(0, maxLength) : clean;
 };
+const lettersOnly = (value = '', maxLength = null) => {
+  const clean = String(value || '')
+    .replace(/[0-9]/g, '')
+    .replace(/[^a-zA-ZáéíóúÁÉÍÓÚüÜñÑ\s.,;:¿?¡!()"'\-]/g, '')
+    .replace(/\s+/g, ' ');
+  const trimmed = maxLength ? clean.slice(0, maxLength) : clean;
+  return toUpper(trimmed);
+};
+const ORIENTATION_CONTEXT = {
+  acceptedPlaces: ['UNIVERSIDAD AUTÓNOMA DE NAYARIT', 'UAN', 'UNIDAD ACADÉMICA DE ECONOMÍA', 'UNIDAD ACADÉMICA DE SISTEMAS COMPUTACIONALES'],
+  acceptedCities: ['TEPIC', 'TEPIC NAYARIT'],
+};
+const isAcceptedOrientationText = (value = '', accepted = []) => {
+  const current = normalize(value);
+  return Boolean(current) && accepted.some((item) => {
+    const target = normalize(item);
+    return current === target || current.includes(target) || target.includes(current);
+  });
+};
 const MAX_FLUENCY_AUDIO_BYTES = 600000;
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -391,6 +410,8 @@ const initialAnswers = (phase, version) => ({
     free: ['', '', '', '', ''],
     category: {},
     multipleChoice: {},
+    cuesActivated: false,
+    cuesActivatedAt: null,
   },
   orientation: {
     day: '',
@@ -407,6 +428,9 @@ const initialAnswers = (phase, version) => ({
     completedAt: null,
     memoryLearningCompletedAt: null,
     delayedRecallStartedAt: null,
+    fluencyStartedAt: null,
+    fluencyFinishedAt: null,
+    fluencyDurationSeconds: null,
     audioMode: 'browser-synthesis-fallback',
   },
 });
@@ -1191,6 +1215,72 @@ const buildParticipantSummaries = (records = []) => {
   }).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 };
 
+
+function ProtocolCompliancePanel({ results }) {
+  const summaries = buildParticipantSummaries(results);
+  const reviewed = results.filter((record) => record.finalScore?.complete).length;
+  const experimental = summaries.filter((item) => String(item.latest?.participant?.group || '').includes('Experimental')).length;
+  const control = summaries.filter((item) => String(item.latest?.participant?.group || '').includes('Control')).length;
+  const paired = summaries.filter((item) => item.pre && item.post).length;
+  const pairedReviewed = summaries.filter((item) => item.preTotal !== null && item.postTotal !== null).length;
+  const missingPost = summaries.filter((item) => item.pre && !item.post).length;
+  const exportProtocolCsv = () => {
+    const header = ['id','participante','fase','version_moca','grupo','edad','escolaridad','sexo','fecha_nacimiento','total_final','atencion','memoria_libre','mis','orientacion','fecha_creacion'];
+    const rows = results.map((record) => {
+      const score = record.finalScore || {};
+      const obj = record.objectiveScores || score.objective || {};
+      return [
+        record.id,
+        record.participant?.name || '',
+        record.phase || '',
+        record.version || '',
+        record.participant?.group || '',
+        record.participant?.age || '',
+        record.participant?.educationYears || '',
+        record.participant?.sex || '',
+        record.participant?.birthDate || '',
+        score.total ?? '',
+        obj.attention ?? '',
+        obj.freeRecall ?? '',
+        obj.mis ?? '',
+        obj.orientation ?? '',
+        record.createdAt ? new Date(record.createdAt).toISOString() : '',
+      ];
+    });
+    const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const csv = [header, ...rows].map((row) => row.map(escape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `PANEG_datos_moca_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <section className="mb-6 rounded-3xl border border-violet-200 bg-white p-5 shadow-xl">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-violet-700">Control del protocolo PANEG</p>
+          <h2 className="text-2xl font-black text-slate-900">Indicadores metodológicos del estudio</h2>
+          <p className="mt-1 text-sm text-slate-500">Seguimiento digital del diseño pretest–postest, grupo control/experimental, revisión profesional y exportación para SPSS, R o Python.</p>
+        </div>
+        <button type="button" onClick={exportProtocolCsv} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-black text-white">Exportar CSV MoCA</button>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <MetricCard label="Participantes" value={summaries.length} note="Nombres únicos" />
+        <MetricCard label="Experimental" value={experimental} note="Uso de IAGen" />
+        <MetricCard label="Control" value={control} note="Actividad neutra" />
+        <MetricCard label="Pares pre-post" value={paired} note="Con ambas fases" />
+        <MetricCard label="Pares revisados" value={pairedReviewed} note="Listos para análisis" />
+        <MetricCard label="Sin postest" value={missingPost} note={`${reviewed} registros revisados`} className={missingPost ? toneClasses.amber : toneClasses.green} />
+      </div>
+    </section>
+  );
+}
+
 function PowerBIResultsDashboard({ results, onOpenResults }) {
   const summaries = buildParticipantSummaries(results);
   const completed = results.filter((record) => record.finalScore?.complete && Number.isFinite(Number(record.finalScore.total)));
@@ -1386,7 +1476,7 @@ export default function App() {
 
   const cfg = VERSION_CONFIG[phase];
   const theme = cfg.theme === 'blue' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-teal-600 hover:bg-teal-700';
-  const totalSteps = 16;
+  const totalSteps = 15;
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (current) => {
@@ -1682,7 +1772,11 @@ export default function App() {
     setFluencyMicError('');
     setFluencyRecognitionStatus('');
     setFluencyInterimTranscript('');
-    setAnswers((current) => ({ ...current, language: { ...current.language, fluencyTranscript: '' } }));
+    setAnswers((current) => ({
+      ...current,
+      language: { ...current.language, fluencyTranscript: '' },
+      administration: { ...current.administration, fluencyStartedAt: Date.now(), fluencyFinishedAt: null, fluencyDurationSeconds: null },
+    }));
     fluencyActiveRef.current = true;
 
     if (answers.consent.audio && navigator.mediaDevices?.getUserMedia && window.MediaRecorder) {
@@ -1714,7 +1808,9 @@ export default function App() {
           monitorLevel();
           audioContextRef.current = audioContext;
         }
-        const recorder = new MediaRecorder(stream);
+        const recorderOptions = { audioBitsPerSecond: 16000 };
+        if (MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus')) recorderOptions.mimeType = 'audio/webm;codecs=opus';
+        const recorder = new MediaRecorder(stream, recorderOptions);
         mediaChunksRef.current = [];
         recorder.ondataavailable = (event) => { if (event.data?.size) mediaChunksRef.current.push(event.data); };
         recorder.onerror = (event) => setFluencyMicError(`Error de grabación: ${event.error?.message || 'desconocido'}`);
@@ -1774,6 +1870,18 @@ export default function App() {
     fluencyActiveRef.current = false;
     setFluencyActive(false);
     setFluencyFinished(true);
+    const finishedAt = Date.now();
+    setAnswers((current) => {
+      const startedAt = current.administration?.fluencyStartedAt || finishedAt;
+      return {
+        ...current,
+        administration: {
+          ...current.administration,
+          fluencyFinishedAt: finishedAt,
+          fluencyDurationSeconds: Math.round((finishedAt - startedAt) / 1000),
+        },
+      };
+    });
     try { speechRecognitionRef.current?.stop(); } catch (_) { /* sin acción */ }
     if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
   };
@@ -1814,8 +1922,8 @@ export default function App() {
       Number(record.orientation.month) === today.month,
       Number(record.orientation.year) === today.year,
       normalize(record.orientation.weekday) === normalize(today.weekday),
-      Boolean(record.orientation.place?.trim()),
-      Boolean(record.orientation.city?.trim()),
+      isAcceptedOrientationText(record.orientation.place, ORIENTATION_CONTEXT.acceptedPlaces),
+      isAcceptedOrientationText(record.orientation.city, ORIENTATION_CONTEXT.acceptedCities),
     ].filter(Boolean).length;
 
     return { attention, freeRecall: freeCorrect, mis, orientation };
@@ -2200,6 +2308,7 @@ export default function App() {
             </div>
           </div>
           {renderPasswordDialog()}
+          <ProtocolCompliancePanel results={results} />
           <div className="grid gap-6 xl:grid-cols-[minmax(860px,1.35fr)_minmax(420px,0.65fr)]">
             <div className="rounded-2xl bg-white shadow">
               <div className="border-b p-4">
@@ -2310,7 +2419,7 @@ export default function App() {
   const next = () => setStep((current) => Math.min(15, current + 1));
   return (
     <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-24"><PageHeader phase={phase} version={cfg.version} progress={progress} theme={cfg.theme} onGoHome={goToTests} onGoEvaluator={openEvaluatorLogin}/><PageCard>
-      {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input className="rounded-xl border-2 p-4 uppercase" placeholder="NOMBRE COMPLETO" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/><label className="text-sm font-bold text-slate-700">Edad<input type="text" inputMode="numeric" maxLength="3" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="text" inputMode="numeric" maxLength="2" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><label className="text-sm font-bold text-slate-700">Fecha de nacimiento<input type="date" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/></label><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div>{(!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex) && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Complete nombre, edad válida, escolaridad, fecha de nacimiento y sexo para continuar.</p>}<NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex}/></div>}
+      {step === 0 && <div><h2 className="text-3xl font-black">Registro del participante</h2><p className="mt-2 text-slate-500">La aplicación debe ser supervisada por una persona capacitada.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><label className="text-sm font-bold text-slate-700">Nombre del participante<input className="mt-1 w-full rounded-xl border-2 p-4 font-normal uppercase" placeholder="NOMBRE COMPLETO" value={answers.participant.name} onChange={(e) => setParticipant('name', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Edad<input type="text" inputMode="numeric" maxLength="3" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="Ej. 21" value={answers.participant.age} onChange={(e) => setParticipant('age', e.target.value)}/></label><label className="text-sm font-bold text-slate-700">Años completos de escolaridad<input type="text" inputMode="numeric" maxLength="2" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" placeholder="No incluya preescolar o kínder" value={answers.participant.educationYears} onChange={(e) => setParticipant('educationYears', e.target.value)}/><span className="mt-1 block text-xs font-normal text-slate-500">Cuente desde primaria; no incluya preescolar.</span></label><label className="text-sm font-bold text-slate-700">Fecha de nacimiento<input type="date" className="mt-1 w-full rounded-xl border-2 p-4 font-normal" value={answers.participant.birthDate} onChange={(e) => setParticipant('birthDate', e.target.value)}/></label><select className="rounded-xl border-2 p-4" value={answers.participant.sex} onChange={(e) => setParticipant('sex', e.target.value)}><option value="">Sexo</option><option>Mujer</option><option>Hombre</option><option>Otro / prefiere no responder</option></select><select className="rounded-xl border-2 p-4" value={answers.participant.group} onChange={(e) => setParticipant('group', e.target.value)}><option>Experimental (Uso de IAGen)</option><option>Control</option></select></div>{(!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex) && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Complete nombre, edad válida, escolaridad, fecha de nacimiento y sexo para continuar.</p>}<NextStepButton themeClass={theme} onClick={next} disabled={!answers.participant.name || !answers.participant.age || Number(answers.participant.age) < 18 || Number(answers.participant.age) > 120 || answers.participant.educationYears === '' || Number(answers.participant.educationYears) < 0 || Number(answers.participant.educationYears) > 40 || !answers.participant.birthDate || !answers.participant.sex}/></div>}
 
       {step === 1 && <div><h2 className="text-3xl font-black">Alternancia conceptual</h2><p className="mt-2 text-slate-500">Dibuje una línea continua alternando número y letra en orden ascendente, sin unir el final con el inicio.</p><div className="mt-6"><TrailDrawingCanvas image={cfg.trailImage} value={answers.trail.drawing} onChange={(drawing) => setAnswers((c) => ({ ...c, trail: { ...c.trail, drawing } }))}/></div><NextStepButton themeClass={theme} onClick={next} disabled={!answers.trail.drawing}/></div>}
 
@@ -2318,11 +2427,11 @@ export default function App() {
 
       {step === 3 && <div><h2 className="text-3xl font-black">Reloj</h2><div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 font-bold text-orange-800">El examinador debe asegurarse de que no haya relojes visibles.</div><p className="mt-5 text-lg">Dibuje un reloj con todos los números y marque las <strong>{cfg.clockText}</strong>.</p><div className="mt-6"><DrawingCanvas label="Dibujo del reloj" value={answers.clockDrawing} onChange={(clockDrawing) => setAnswers((c) => ({ ...c, clockDrawing }))}/></div><NextStepButton themeClass={theme} onClick={next}/></div>}
 
-      {step === 4 && <div><h2 className="text-3xl font-black">Denominación</h2><p className="mt-2 text-slate-500">Diga el nombre de cada animal. El examinador registra literalmente la respuesta oral.</p><div className="mt-6 grid gap-5 md:grid-cols-3">{cfg.animalImages.map((src,index)=><div key={src}><StimulusImage src={src} alt={`Animal ${index+1}`}/><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.naming[index]} onChange={(e)=>setAnswers((c)=>{const naming=[...c.naming]; naming[index]=toUpper(e.target.value); return {...c,naming};})}/></div>)}</div><div className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Validación automática orientativa: {suggestedNamingScore(answers, cfg)} de 3 respuestas coinciden con las respuestas aceptadas por la guía. La revisión profesional puede corregir variantes orales o errores de transcripción.</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+      {step === 4 && <div><h2 className="text-3xl font-black">Denominación</h2><p className="mt-2 text-slate-500">Diga el nombre de cada animal. El examinador registra literalmente la respuesta oral.</p><div className="mt-6 grid gap-5 md:grid-cols-3">{cfg.animalImages.map((src,index)=><div key={src}><StimulusImage src={src} alt={`Animal ${index+1}`}/><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.naming[index]} onChange={(e)=>setAnswers((c)=>{const naming=[...c.naming]; naming[index]=lettersOnly(e.target.value); return {...c,naming};})}/></div>)}</div><div className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Validación automática orientativa: {suggestedNamingScore(answers, cfg)} de 3 respuestas coinciden con las respuestas aceptadas por la guía. La revisión profesional puede corregir variantes orales o errores de transcripción.</div><NextStepButton themeClass={theme} onClick={next}/></div>}
 
-      {step === 5 && <div><h2 className="text-3xl font-black">Memoria · primer intento</h2><p className="mt-2 text-slate-500">Las cinco palabras se presentan auditivamente, una por segundo. No deben mostrarse por escrito al participante.</p><button type="button" disabled={played.memory1} onClick={()=>playTimedSequence(cfg.words,'memory1',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory1?'Lista reproducida':'Escuchar lista'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial1.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial1=[...c.memoryTrial1]; memoryTrial1[index]=toUpper(e.target.value); return {...c,memoryTrial1};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 1: {countExactWords(answers.memoryTrial1, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory1}/></div>}
+      {step === 5 && <div><h2 className="text-3xl font-black">Memoria · primer intento</h2><p className="mt-2 text-slate-500">Las cinco palabras se presentan auditivamente, una por segundo. No deben mostrarse por escrito al participante.</p><button type="button" disabled={played.memory1} onClick={()=>playTimedSequence(cfg.words,'memory1',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory1?'Lista reproducida':'Escuchar lista'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial1.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial1=[...c.memoryTrial1]; memoryTrial1[index]=lettersOnly(e.target.value); return {...c,memoryTrial1};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 1: {countExactWords(answers.memoryTrial1, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory1}/></div>}
 
-      {step === 6 && <div><h2 className="text-3xl font-black">Memoria · segundo intento</h2><p className="mt-2 text-slate-500">Repita la misma lista completa, incluso si el primer intento fue exitoso.</p><button type="button" disabled={played.memory2} onClick={()=>playTimedSequence(cfg.words,'memory2',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory2?'Lista reproducida':'Escuchar lista otra vez'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial2.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial2=[...c.memoryTrial2]; memoryTrial2[index]=toUpper(e.target.value); return {...c,memoryTrial2};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 2: {countExactWords(answers.memoryTrial2, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><p className="mt-5 font-bold text-slate-700">Al terminar, informe: “Le volveré a preguntar estas palabras al final de la prueba”.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory2}/></div>}
+      {step === 6 && <div><h2 className="text-3xl font-black">Memoria · segundo intento</h2><p className="mt-2 text-slate-500">Repita la misma lista completa, incluso si el primer intento fue exitoso.</p><button type="button" disabled={played.memory2} onClick={()=>playTimedSequence(cfg.words,'memory2',()=>setAnswers((c)=>({...c,administration:{...c.administration,memoryLearningCompletedAt:Date.now()}})))} className="mt-6 rounded-xl bg-indigo-600 px-6 py-4 font-black text-white disabled:opacity-50">{played.memory2?'Lista reproducida':'Escuchar lista otra vez'}</button><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.memoryTrial2.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const memoryTrial2=[...c.memoryTrial2]; memoryTrial2[index]=lettersOnly(e.target.value); return {...c,memoryTrial2};})}/>)}</div><p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Registro automático del intento 2: {countExactWords(answers.memoryTrial2, cfg.words)} de 5 palabras correctas. Este ensayo no suma puntos al total MoCA.</p><p className="mt-5 font-bold text-slate-700">Al terminar, informe: “Le volveré a preguntar estas palabras al final de la prueba”.</p><NextStepButton themeClass={theme} onClick={next} disabled={!played.memory2}/></div>}
 
       {step === 7 && <div><h2 className="text-3xl font-black">Atención · dígitos</h2><div className="mt-6 space-y-6"><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia delante</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-forward.mp3`)} text={cfg.forwardDigits.join(', ')} onceKey="digitsForward" played={played.digitsForward} onPlayed={markPlayed}/><input type="text" inputMode="numeric" maxLength="5" className="mt-4 w-full rounded-xl border-2 p-3 tracking-widest" placeholder="Registrar solo dígitos" value={answers.attention.forward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,forward:digitsOnly(e.target.value,5)}}))}/><p className="mt-2 text-xs font-bold text-slate-500">Solo se aceptan números; no escriba letras ni espacios.</p></section><section className="rounded-xl bg-slate-50 p-5"><p className="font-bold">Serie hacia atrás</p><AudioButton src={publicAsset(`audio/${cfg.folder}/digits-backward.mp3`)} text={cfg.backwardDigits.join(', ')} onceKey="digitsBackward" played={played.digitsBackward} onPlayed={markPlayed}/><input type="text" inputMode="numeric" maxLength="3" className="mt-4 w-full rounded-xl border-2 p-3 tracking-widest" placeholder="Registrar solo dígitos en orden inverso" value={answers.attention.backward} onChange={(e)=>setAnswers((c)=>({...c,attention:{...c.attention,backward:digitsOnly(e.target.value,3)}}))}/><p className="mt-2 text-xs font-bold text-slate-500">Solo se aceptan números; no escriba letras ni espacios.</p></section></div><NextStepButton themeClass={theme} onClick={next} disabled={!played.digitsForward || !played.digitsBackward || answers.attention.forward.length !== 5 || answers.attention.backward.length !== 3}/></div>}
 
@@ -2330,7 +2439,7 @@ export default function App() {
 
       {step === 9 && <div><h2 className="text-3xl font-black">Sustracción seriada</h2><p className="mt-2 text-slate-500">Reste mentalmente 7 a partir de {cfg.serialStart}. No use dedos, lápiz, papel o calculadora. Registre cada respuesta sin corregir las anteriores.</p><div className="mt-6 inline-flex items-center rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3 text-xl font-black text-blue-900"><span>Inicio: {cfg.serialStart}</span><span className="mx-3">−</span><span>7</span><span className="mx-3">=</span><span>respuesta 1</span></div><div className="mt-8 grid gap-4 md:grid-cols-5">{answers.attention.serial7.map((value,index)=><label key={index} className="text-center text-xs font-bold uppercase tracking-wide text-slate-500">Respuesta {index+1}<input type="text" inputMode="numeric" maxLength="3" className="mt-2 w-full rounded-xl border-2 p-4 text-center text-xl font-black" value={value} onChange={(e)=>setAnswers((c)=>{const serial7=[...c.attention.serial7]; serial7[index]=digitsOnly(e.target.value,3); return {...c,attention:{...c.attention,serial7}};})}/></label>)}</div><NextStepButton themeClass={theme} onClick={next} disabled={answers.attention.serial7.some((item)=>!String(item).trim())}/></div>}
 
-      {step === 10 && <div><h2 className="text-3xl font-black">Repetición de frases</h2><p className="mt-2 text-slate-500">Cada frase se escucha una sola vez. El participante debe repetirla oralmente cuando termine el audio. El examinador transcribe después de escuchar la respuesta; no es necesario escribir mientras se reproduce la frase.</p>{cfg.sentences.map((sentence,index)=><section key={sentence} className="mt-6 rounded-xl bg-slate-50 p-5"><AudioButton src={publicAsset(`audio/${cfg.folder}/sentence-${index+1}.mp3`)} text={sentence} onceKey={`sentence${index+1}`} played={played[`sentence${index+1}`]} onPlayed={markPlayed} label={`Escuchar frase ${index+1}`} speechRate={0.85}/><textarea className="mt-4 w-full rounded-xl border-2 p-3" rows="3" placeholder="Transcripción literal de la respuesta oral, después de que el participante termine de repetir" value={answers.language[`sentence${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,[`sentence${index+1}`]:toUpper(e.target.value)}}))}/></section>)}<div className="mt-4 rounded-xl bg-fuchsia-50 p-3 text-sm font-bold text-fuchsia-800">Puntaje automático sugerido: {suggestedRepetitionScore(answers, cfg)}/2. La guía exige repetición exacta; la revisión profesional debe confirmar omisiones, adiciones, sustituciones y cambios gramaticales.</div><NextStepButton themeClass={theme} onClick={next} disabled={!played.sentence1 || !played.sentence2}/></div>}
+      {step === 10 && <div><h2 className="text-3xl font-black">Repetición de frases</h2><p className="mt-2 text-slate-500">Cada frase se escucha una sola vez. El participante debe repetirla oralmente cuando termine el audio. El examinador transcribe después de escuchar la respuesta; no es necesario escribir mientras se reproduce la frase.</p>{cfg.sentences.map((sentence,index)=><section key={sentence} className="mt-6 rounded-xl bg-slate-50 p-5"><AudioButton src={publicAsset(`audio/${cfg.folder}/sentence-${index+1}.mp3`)} text={sentence} onceKey={`sentence${index+1}`} played={played[`sentence${index+1}`]} onPlayed={markPlayed} label={`Escuchar frase ${index+1}`} speechRate={0.85}/><textarea className="mt-4 w-full rounded-xl border-2 p-3" rows="3" placeholder="Transcripción literal de la respuesta oral, después de que el participante termine de repetir" value={answers.language[`sentence${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,language:{...c.language,[`sentence${index+1}`]:lettersOnly(e.target.value)}}))}/></section>)}<div className="mt-4 rounded-xl bg-fuchsia-50 p-3 text-sm font-bold text-fuchsia-800">Puntaje automático sugerido: {suggestedRepetitionScore(answers, cfg)}/2. La guía exige repetición exacta; la revisión profesional debe confirmar omisiones, adiciones, sustituciones y cambios gramaticales.</div><NextStepButton themeClass={theme} onClick={next} disabled={!played.sentence1 || !played.sentence2}/></div>}
 
       {step === 11 && (
         <div>
@@ -2412,11 +2521,11 @@ export default function App() {
         </div>
       )}
 
-      {step === 12 && <div><h2 className="text-3xl font-black">Abstracción</h2><p className="mt-2 text-slate-500">La respuesta no tiene que ser una sola palabra. Debe expresar la categoría o relación común entre los dos elementos.</p><div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-5"><p className="font-bold">Ejemplo: naranja y plátano</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta" value={answers.abstraction.example} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,example:toUpper(e.target.value)}}))}/><label className="mt-3 flex gap-2"><input type="checkbox" checked={answers.abstraction.promptUsed} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,promptUsed:e.target.checked}}))}/><span>Se utilizó la única pista permitida en esta sección.</span></label></div>{cfg.abstractionPairs.map((pair,index)=><div key={pair.join('-')} className="mt-5 rounded-xl bg-slate-50 p-5"><p className="font-black">{pair[0]} – {pair[1]}</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.abstraction[`pair${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,[`pair${index+1}`]:toUpper(e.target.value)}}))}/></div>)}<div className="mt-4 rounded-xl bg-cyan-50 p-3 text-sm font-bold text-cyan-800">Puntaje automático sugerido: {suggestedAbstractionScore(answers, cfg)}/2. La revisión profesional debe confirmar respuestas equivalentes no incluidas literalmente.</div><NextStepButton themeClass={theme} onClick={()=>{setAnswers((c)=>({...c,administration:{...c.administration,delayedRecallStartedAt:Date.now()}}));next();}}/></div>}
+      {step === 12 && <div><h2 className="text-3xl font-black">Abstracción</h2><p className="mt-2 text-slate-500">La respuesta no tiene que ser una sola palabra. Debe expresar la categoría o relación común entre los dos elementos.</p><div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-5"><p className="font-bold">Ejemplo: naranja y plátano</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Registrar respuesta" value={answers.abstraction.example} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,example:lettersOnly(e.target.value)}}))}/><label className="mt-3 flex gap-2"><input type="checkbox" checked={answers.abstraction.promptUsed} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,promptUsed:e.target.checked}}))}/><span>Se utilizó la única pista permitida en esta sección.</span></label></div>{cfg.abstractionPairs.map((pair,index)=><div key={pair.join('-')} className="mt-5 rounded-xl bg-slate-50 p-5"><p className="font-black">{pair[0]} – {pair[1]}</p><input className="mt-3 w-full rounded-xl border-2 p-3" placeholder="Respuesta oral registrada" value={answers.abstraction[`pair${index+1}`]} onChange={(e)=>setAnswers((c)=>({...c,abstraction:{...c.abstraction,[`pair${index+1}`]:lettersOnly(e.target.value)}}))}/></div>)}<div className="mt-4 rounded-xl bg-cyan-50 p-3 text-sm font-bold text-cyan-800">Puntaje automático sugerido: {suggestedAbstractionScore(answers, cfg)}/2. La revisión profesional debe confirmar respuestas equivalentes no incluidas literalmente.</div><NextStepButton themeClass={theme} onClick={()=>{setAnswers((c)=>({...c,administration:{...c.administration,delayedRecallStartedAt:Date.now()}}));next();}}/></div>}
 
-      {step === 13 && <div><h2 className="text-3xl font-black">Recuerdo diferido</h2><p className="mt-2 text-slate-500">Primero registre únicamente las palabras recordadas espontáneamente, sin pistas.</p><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.delayedRecall.free.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" value={value} onChange={(e)=>setAnswers((c)=>{const free=[...c.delayedRecall.free];free[index]=toUpper(e.target.value);return {...c,delayedRecall:{...c.delayedRecall,free}};})}/>)}</div><div className="mt-8 space-y-4">{cfg.words.map((word)=>{const freeFound=answers.delayedRecall.free.map(normalize).includes(normalize(word)); if(freeFound)return null; return <div key={word} className="rounded-xl border border-orange-200 bg-orange-50 p-4"><p className="font-bold">Pista de categoría: {cfg.categoryCues[word]}</p><input className="mt-2 w-full rounded-lg border-2 p-2" placeholder="Respuesta con pista" value={answers.delayedRecall.category[word]||''} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,category:{...c.delayedRecall.category,[word]:toUpper(e.target.value)}}}))}/>{normalize(answers.delayedRecall.category[word])!==normalize(word)&&<div className="mt-3"><p className="text-sm font-bold">Elección múltiple</p><div className="mt-2 flex flex-wrap gap-2">{cfg.multipleChoice[word].map((option)=><label key={option} className="rounded-lg border bg-white px-3 py-2"><input type="radio" name={`choice-${word}`} value={option} checked={normalize(answers.delayedRecall.multipleChoice[word])===normalize(option)} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,multipleChoice:{...c.delayedRecall.multipleChoice,[word]:toUpper(e.target.value)}}}))}/> <span className="ml-1 uppercase">{option}</span></label>)}</div></div>}</div>})}</div><NextStepButton themeClass={theme} onClick={next}/></div>}
+      {step === 13 && <div><h2 className="text-3xl font-black">Recuerdo diferido</h2><p className="mt-2 text-slate-500">Primero registre únicamente las palabras recordadas espontáneamente, sin pistas. Después active las pistas; PANEG conservará el registro de que se usaron.</p><div className="mt-6 grid gap-3 md:grid-cols-5">{answers.delayedRecall.free.map((value,index)=><input key={index} className="rounded-xl border-2 p-3 text-center uppercase" placeholder={`Palabra ${index+1}`} value={value} onChange={(e)=>setAnswers((c)=>{const free=[...c.delayedRecall.free];free[index]=lettersOnly(e.target.value);return {...c,delayedRecall:{...c.delayedRecall,free}};})}/>)}</div><div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50 p-4"><label className="flex items-start gap-3 font-bold text-indigo-950"><input type="checkbox" className="mt-1" checked={!!answers.delayedRecall.cuesActivated} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,cuesActivated:e.target.checked,cuesActivatedAt:e.target.checked ? (c.delayedRecall.cuesActivatedAt || Date.now()) : null}}))}/><span>Activar pistas de categoría y elección múltiple. Marque esta opción solo después de registrar el recuerdo libre.</span></label><p className="mt-2 text-xs text-indigo-800">Si activa pistas y luego borra o corrige alguna palabra, el sistema mantiene evidencia de que las pistas fueron habilitadas.</p></div>{answers.delayedRecall.cuesActivated ? <div className="mt-8 space-y-4">{cfg.words.map((word)=>{const freeFound=answers.delayedRecall.free.map(normalize).includes(normalize(word)); return <div key={word} className={`rounded-xl border p-4 ${freeFound ? 'border-slate-200 bg-slate-50' : 'border-orange-200 bg-orange-50'}`}><div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between"><p className="font-bold">{word}: pista de categoría — {cfg.categoryCues[word]}</p>{freeFound&&<span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500">Registrada en recuerdo libre; no aplique pista</span>}</div><input disabled={freeFound} className="mt-2 w-full rounded-lg border-2 p-2 disabled:bg-slate-100" placeholder="Respuesta con pista" value={answers.delayedRecall.category[word]||''} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,category:{...c.delayedRecall.category,[word]:lettersOnly(e.target.value)}}}))}/>{!freeFound && normalize(answers.delayedRecall.category[word])!==normalize(word)&&<div className="mt-3"><p className="text-sm font-bold">Elección múltiple</p><div className="mt-2 flex flex-wrap gap-2">{cfg.multipleChoice[word].map((option)=><label key={option} className="rounded-lg border bg-white px-3 py-2"><input type="radio" name={`choice-${word}`} value={option} checked={normalize(answers.delayedRecall.multipleChoice[word])===normalize(option)} onChange={(e)=>setAnswers((c)=>({...c,delayedRecall:{...c.delayedRecall,multipleChoice:{...c.delayedRecall.multipleChoice,[word]:toUpper(e.target.value)}}}))}/> <span className="ml-1 uppercase">{option}</span></label>)}</div></div>}</div>})}</div> : <p className="mt-6 rounded-xl bg-amber-50 p-4 text-sm font-bold text-amber-800">Las pistas todavía no están activadas. Registre primero el recuerdo libre y active las pistas solo cuando proceda.</p>}<NextStepButton themeClass={theme} onClick={next}/></div>}
 
-      {step === 14 && <div><h2 className="text-3xl font-black">Orientación</h2><p className="mt-2 text-slate-500">Registre por separado día del mes, mes, año, día de la semana, lugar y ciudad. La guía asigna un punto independiente a cada componente; separarlos evita que un calendario revele la respuesta y permite calificar 0–6 correctamente.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Día del mes" value={answers.orientation.day} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,day:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Mes" value={answers.orientation.month} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,month:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="4" className="rounded-xl border-2 p-4" placeholder="Año" value={answers.orientation.year} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,year:digitsOnly(e.target.value,4)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="DÍA DE LA SEMANA" value={answers.orientation.weekday} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,weekday:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="LUGAR EXACTO" value={answers.orientation.place} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,place:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="CIUDAD/LOCALIDAD" value={answers.orientation.city} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,city:toUpper(e.target.value)}}))}/></div><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">Día, mes y año solo aceptan dígitos. Día de la semana, lugar y ciudad se guardan en mayúsculas.</p>{saveError&&<p className="mt-5 rounded-xl bg-red-50 p-4 font-bold text-red-700">{saveError}</p>}<NextStepButton themeClass={theme} onClick={saveResult} disabled={saving || !authReady || !answers.orientation.day || !answers.orientation.month || !answers.orientation.year || !answers.orientation.weekday || !answers.orientation.place || !answers.orientation.city}>{saving?'Guardando…':'Guardar resultados'}</NextStepButton></div>}
+      {step === 14 && <div><h2 className="text-3xl font-black">Orientación</h2><p className="mt-2 text-slate-500">Registre por separado día del mes, mes, año, día de la semana, lugar y ciudad. La guía asigna un punto independiente a cada componente; separarlos evita que un calendario revele la respuesta y permite calificar 0–6 correctamente.</p><div className="mt-6 grid gap-4 md:grid-cols-2"><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Día del mes" value={answers.orientation.day} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,day:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="2" className="rounded-xl border-2 p-4" placeholder="Mes" value={answers.orientation.month} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,month:digitsOnly(e.target.value,2)}}))}/><input type="text" inputMode="numeric" maxLength="4" className="rounded-xl border-2 p-4" placeholder="Año" value={answers.orientation.year} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,year:digitsOnly(e.target.value,4)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="DÍA DE LA SEMANA" value={answers.orientation.weekday} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,weekday:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="LUGAR EXACTO" value={answers.orientation.place} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,place:toUpper(e.target.value)}}))}/><input className="rounded-xl border-2 p-4 uppercase" placeholder="CIUDAD/LOCALIDAD" value={answers.orientation.city} onChange={(e)=>setAnswers((c)=>({...c,orientation:{...c.orientation,city:toUpper(e.target.value)}}))}/></div><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">Día, mes y año solo aceptan dígitos. Día de la semana, lugar y ciudad se guardan en mayúsculas. Para puntuar lugar y ciudad, PANEG compara contra el contexto configurado: lugar aceptado UAN / Universidad Autónoma de Nayarit / unidad académica; ciudad aceptada Tepic. Si la aplicación ocurre en otro lugar, ajuste estos criterios en el código antes de aplicar.</p>{saveError&&<p className="mt-5 rounded-xl bg-red-50 p-4 font-bold text-red-700">{saveError}</p>}<NextStepButton themeClass={theme} onClick={saveResult} disabled={saving || !authReady || !answers.orientation.day || !answers.orientation.month || !answers.orientation.year || !answers.orientation.weekday || !answers.orientation.place || !answers.orientation.city}>{saving?'Guardando…':'Guardar resultados'}</NextStepButton></div>}
 
       {step === 15 && <div className="py-14 text-center"><div className={`mx-auto flex h-24 w-24 items-center justify-center rounded-full text-5xl text-white ${cfg.theme==='blue'?'bg-blue-600':'bg-teal-600'}`}>✓</div><h2 className="mt-6 text-3xl font-black">Evaluación registrada</h2><p className="mt-3 text-slate-600">El resultado queda pendiente de revisión profesional antes de calcular el puntaje final.</p>{saveMessage&&<p className="mx-auto mt-5 max-w-lg rounded-xl bg-green-50 p-4 font-bold text-green-700">{saveMessage}</p>}<button onClick={()=>setScreen('home')} className="mt-8 rounded-xl bg-slate-800 px-8 py-3 font-black text-white">Volver al inicio</button></div>}
     </PageCard></div>
