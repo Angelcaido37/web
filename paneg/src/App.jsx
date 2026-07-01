@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 
 /*
-  PANEG–MoCA supervisado v1.6 (rutas públicas robustas)
+  PANEG–MoCA supervisado v1.7 (dashboard explicable)
   ------------------------------------------------------------
   Prototipo técnico alineado con las guías MoCA 8.1 y 8.3.
   No sustituye autorización de uso, capacitación/certificación
@@ -712,6 +712,565 @@ function ScoringGuide({ title = "Cómo calificar según la guía", children }) {
   );
 }
 
+const clampScore = (value, min = 0, max = 30) => Math.max(min, Math.min(max, Number(value || 0)));
+
+const classifyTotal = (total, complete = true) => {
+  if (!complete || total === null || total === undefined || Number.isNaN(Number(total))) {
+    return {
+      label: 'Datos insuficientes',
+      tone: 'slate',
+      short: 'Aún no hay puntaje final revisado.',
+      action: 'Complete y guarde la revisión profesional para generar la interpretación.',
+    };
+  }
+  const score = Number(total);
+  if (score >= 26) {
+    return {
+      label: 'Rango esperado',
+      tone: 'green',
+      short: 'El puntaje global se ubica por arriba del punto de referencia general del MoCA.',
+      action: 'Mantener interpretación como tamizaje y revisar la distribución por dominios.',
+    };
+  }
+  if (score >= 23) {
+    return {
+      label: 'Resultado limítrofe',
+      tone: 'amber',
+      short: 'El puntaje global se ubica cerca del punto de referencia y requiere revisión cuidadosa.',
+      action: 'Verifique errores por dominio, condiciones de aplicación, escolaridad y necesidad de valoración profesional.',
+    };
+  }
+  return {
+    label: 'Posible alteración cognitiva',
+    tone: 'red',
+    short: 'El puntaje global es compatible con una alerta de tamizaje cognitivo.',
+    action: 'No emitir diagnóstico desde PANEG; derivar a interpretación clínica/profesional y revisar evidencias.',
+  };
+};
+
+const toneClasses = {
+  green: 'border-green-200 bg-green-50 text-green-900',
+  amber: 'border-amber-200 bg-amber-50 text-amber-900',
+  red: 'border-red-200 bg-red-50 text-red-900',
+  slate: 'border-slate-200 bg-slate-50 text-slate-800',
+};
+
+const attentionBreakdown = (record, currentCfg) => {
+  const forward = normalize(record?.attention?.forward).replace(/\s/g, '');
+  const backward = normalize(record?.attention?.backward).replace(/\s/g, '');
+  const forwardPoint = forward === currentCfg.forwardDigits.join('') ? 1 : 0;
+  const backwardPoint = backward === currentCfg.backwardExpected ? 1 : 0;
+  const vigilanceErrors = Number(record?.attention?.vigilanceFalseAlarms || 0) + Number(record?.attention?.vigilanceOmissions || 0);
+  const vigilancePoint = vigilanceErrors <= 1 ? 1 : 0;
+  let serialCorrect = 0;
+  let previous = currentCfg.serialStart;
+  (record?.attention?.serial7 || []).forEach((raw) => {
+    const value = Number(raw);
+    if (Number.isFinite(value) && value === previous - 7) serialCorrect += 1;
+    if (Number.isFinite(value)) previous = value;
+  });
+  const serialPoints = serialCorrect >= 4 ? 3 : serialCorrect >= 2 ? 2 : serialCorrect === 1 ? 1 : 0;
+  return {
+    forwardPoint,
+    backwardPoint,
+    vigilancePoint,
+    serialCorrect,
+    serialPoints,
+    vigilanceErrors,
+    total: forwardPoint + backwardPoint + vigilancePoint + serialPoints,
+  };
+};
+
+
+// Funciones globales usadas por el tablero inferior.
+// Antes estaban dentro del componente App; por eso el botón "Abrir detalle"
+// podía dejar la pantalla en blanco al intentar llamar scoreObjective/buildFinalScore
+// desde componentes definidos fuera de App.
+const scoreObjective = (record = {}) => {
+  const currentCfg = Object.values(VERSION_CONFIG).find((item) => item.version === record?.version) || VERSION_CONFIG.Pretest;
+  const attention = attentionBreakdown(record, currentCfg);
+
+  const freeNormalized = (record?.delayedRecall?.free || []).map(normalize);
+  const freeCorrect = currentCfg.words.filter((word) => freeNormalized.includes(normalize(word))).length;
+  let categoryCorrect = 0;
+  let choiceCorrect = 0;
+  currentCfg.words.forEach((word) => {
+    if (freeNormalized.includes(normalize(word))) return;
+    if (normalize(record?.delayedRecall?.category?.[word]) === normalize(word)) categoryCorrect += 1;
+    else if (normalize(record?.delayedRecall?.multipleChoice?.[word]) === normalize(word)) choiceCorrect += 1;
+  });
+  const mis = freeCorrect * 3 + categoryCorrect * 2 + choiceCorrect;
+
+  const today = todayParts();
+  const orientation = [
+    Number(record?.orientation?.day) === today.day,
+    Number(record?.orientation?.month) === today.month,
+    Number(record?.orientation?.year) === today.year,
+    normalize(record?.orientation?.weekday) === normalize(today.weekday),
+    Boolean(record?.orientation?.place?.trim?.()),
+    Boolean(record?.orientation?.city?.trim?.()),
+  ].filter(Boolean).length;
+
+  return { attention: attention.total, freeRecall: freeCorrect, mis, orientation };
+};
+
+const buildFinalScore = (record = {}) => {
+  const objective = scoreObjective(record);
+  const manualScores = record?.manualScores || {};
+  const manualTotal = ['trail', 'copy', 'clock', 'naming', 'repetition', 'fluency', 'abstraction']
+    .reduce((sum, key) => sum + Number(manualScores[key] || 0), 0);
+  const base = manualTotal + objective.attention + objective.freeRecall + objective.orientation;
+  const educationAdjustment = Number(record?.participant?.educationYears) <= 12 ? 1 : 0;
+  return {
+    objective,
+    base,
+    educationAdjustment,
+    total: Math.min(30, base + educationAdjustment),
+    complete: Boolean(record?.evaluatorReviewed),
+  };
+};
+
+const buildDomainScores = (manualScores = {}, objective = {}) => {
+  const manual = {
+    trail: clampScore(manualScores.trail, 0, 1),
+    copy: clampScore(manualScores.copy, 0, 1),
+    clock: clampScore(manualScores.clock, 0, 3),
+    naming: clampScore(manualScores.naming, 0, 3),
+    repetition: clampScore(manualScores.repetition, 0, 2),
+    fluency: clampScore(manualScores.fluency, 0, 1),
+    abstraction: clampScore(manualScores.abstraction, 0, 2),
+  };
+  return [
+    { key: 'visuospatial', label: 'Visuoespacial / ejecutiva', score: manual.trail + manual.copy + manual.clock, max: 5 },
+    { key: 'naming', label: 'Denominación', score: manual.naming, max: 3 },
+    { key: 'attention', label: 'Atención', score: clampScore(objective.attention, 0, 6), max: 6 },
+    { key: 'language', label: 'Lenguaje', score: manual.repetition + manual.fluency, max: 3 },
+    { key: 'abstraction', label: 'Abstracción', score: manual.abstraction, max: 2 },
+    { key: 'memory', label: 'Recuerdo diferido', score: clampScore(objective.freeRecall, 0, 5), max: 5 },
+    { key: 'orientation', label: 'Orientación', score: clampScore(objective.orientation, 0, 6), max: 6 },
+  ];
+};
+
+const buildItemEvidence = (record, manualScores = {}, currentCfg) => {
+  const attention = attentionBreakdown(record, currentCfg);
+  const fluency = analyzeFluencyTranscript(record?.language?.fluencyTranscript || '', currentCfg.fluencyLetter);
+  return [
+    { label: 'Alternancia', score: clampScore(manualScores.trail, 0, 1), max: 1, detail: 'Secuencia y cruces' },
+    { label: currentCfg.copyTitle, score: clampScore(manualScores.copy, 0, 1), max: 1, detail: 'Copia visuoconstructiva' },
+    { label: 'Reloj', score: clampScore(manualScores.clock, 0, 3), max: 3, detail: `Hora ${currentCfg.clockText}` },
+    { label: 'Denominación', score: clampScore(manualScores.naming, 0, 3), max: 3, detail: 'Animales' },
+    { label: 'Dígitos directos', score: attention.forwardPoint, max: 1, detail: (record?.attention?.forward || '—') },
+    { label: 'Dígitos inversos', score: attention.backwardPoint, max: 1, detail: (record?.attention?.backward || '—') },
+    { label: 'Vigilancia A', score: attention.vigilancePoint, max: 1, detail: `${attention.vigilanceErrors} error(es)` },
+    { label: 'Restas seriadas', score: attention.serialPoints, max: 3, detail: `${attention.serialCorrect} resta(s) correcta(s)` },
+    { label: 'Repetición', score: clampScore(manualScores.repetition, 0, 2), max: 2, detail: 'Frases' },
+    { label: `Fluidez ${currentCfg.fluencyLetter}`, score: clampScore(manualScores.fluency, 0, 1), max: 1, detail: `${fluency.validCandidates.length} candidatas` },
+    { label: 'Abstracción', score: clampScore(manualScores.abstraction, 0, 2), max: 2, detail: 'Categorías' },
+    { label: 'Recuerdo libre', score: clampScore(record?.objectiveScores?.freeRecall ?? 0, 0, 5), max: 5, detail: 'Sin pistas' },
+    { label: 'Orientación', score: clampScore(record?.objectiveScores?.orientation ?? 0, 0, 6), max: 6, detail: 'Fecha/lugar' },
+  ];
+};
+
+const findPairedRecord = (records = [], selected) => {
+  if (!selected) return null;
+  const selectedName = normalize(selected.participant?.name || selected.consent?.participantName || '');
+  return records.find((record) => {
+    const recordName = normalize(record.participant?.name || record.consent?.participantName || '');
+    return record.id !== selected.id && selectedName && recordName === selectedName && record.phase !== selected.phase;
+  }) || null;
+};
+
+const getStoredFinalTotal = (record) => (record?.finalScore?.complete ? Number(record.finalScore.total) : null);
+
+const buildPrePostComparison = (selected, selectedFinal, pairedRecord) => {
+  const selectedTotal = Number(selectedFinal?.total ?? 0);
+  const pairedTotal = getStoredFinalTotal(pairedRecord);
+  const preTotal = selected?.phase === 'Pretest' ? selectedTotal : pairedTotal;
+  const postTotal = selected?.phase === 'Postest' ? selectedTotal : pairedTotal;
+  const delta = preTotal !== null && preTotal !== undefined && postTotal !== null && postTotal !== undefined ? postTotal - preTotal : null;
+  return { preTotal, postTotal, delta, pairedRecord, pairedReviewed: pairedTotal !== null };
+};
+
+const buildInterpretation = (finalScore, domains, comparison) => {
+  const classification = classifyTotal(finalScore?.total, true);
+  const lowDomains = domains.filter((domain) => domain.max && domain.score / domain.max < 0.75);
+  const strongDomains = domains.filter((domain) => domain.max && domain.score / domain.max >= 0.9);
+  const trend = comparison?.delta === null
+    ? 'Aún no hay una comparación pretest-postest revisada para este participante.'
+    : comparison.delta > 0
+      ? `Se observa incremento global de +${comparison.delta} punto(s) entre pretest y postest.`
+      : comparison.delta < 0
+        ? `Se observa disminución global de ${comparison.delta} punto(s) entre pretest y postest.`
+        : 'El puntaje global se mantiene estable entre pretest y postest.';
+  return {
+    classification,
+    trend,
+    strengths: strongDomains.map((domain) => `${domain.label} (${domain.score}/${domain.max})`),
+    alerts: lowDomains.map((domain) => `${domain.label} (${domain.score}/${domain.max})`),
+    narrative: `${classification.short} ${trend}`,
+    recommendation: `${classification.action} Este texto es orientativo, no diagnóstico, y debe ser validado por el evaluador responsable.`,
+  };
+};
+
+const downloadEvaluatorReport = ({ record, finalScore, domains, interpretation, comparison }) => {
+  const safeName = normalize(record?.participant?.name || 'participante').replace(/\s+/g, '_') || 'participante';
+  const lines = [
+    'PANEG - Reporte de revisión cognitiva',
+    '=====================================',
+    `Participante: ${record?.participant?.name || 'Sin nombre'}`,
+    `Fase: ${record?.phase} · MoCA ${record?.version}`,
+    `Fecha de revisión: ${new Date().toLocaleString('es-MX')}`,
+    '',
+    `Puntaje base: ${finalScore.base}/30`,
+    `Ajuste por escolaridad: +${finalScore.educationAdjustment}`,
+    `Total: ${finalScore.total}/30`,
+    `Clasificación orientativa: ${interpretation.classification.label}`,
+    `Pretest: ${comparison.preTotal ?? 'Sin dato'} · Postest: ${comparison.postTotal ?? 'Sin dato'} · Cambio: ${comparison.delta ?? 'Sin dato'}`,
+    '',
+    'Dominios:',
+    ...domains.map((domain) => `- ${domain.label}: ${domain.score}/${domain.max}`),
+    '',
+    'Análisis automático orientativo:',
+    interpretation.narrative,
+    interpretation.recommendation,
+    '',
+    'Nota: PANEG es un apoyo de tamizaje/revisión para investigación. No sustituye diagnóstico clínico ni interpretación profesional.',
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `PANEG_reporte_${safeName}_${record?.phase || 'fase'}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+function MetricCard({ label, value, note, className = '' }) {
+  return (
+    <div className={`rounded-2xl border bg-white p-4 shadow-sm ${className}`}>
+      <p className="text-xs font-black uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-2 break-words text-2xl font-black leading-tight text-slate-900">{value}</p>
+      {note && <p className="mt-1 text-xs font-bold text-slate-500">{note}</p>}
+    </div>
+  );
+}
+
+function DomainBars({ domains }) {
+  return (
+    <div className="space-y-3">
+      {domains.map((domain) => {
+        const pct = domain.max ? Math.round((domain.score / domain.max) * 100) : 0;
+        return (
+          <div key={domain.key}>
+            <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-600">
+              <span>{domain.label}</span><span>{domain.score}/{domain.max}</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-slate-200">
+              <div className="h-full rounded-full bg-blue-600" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DomainRadarChart({ domains }) {
+  const size = 260;
+  const center = size / 2;
+  const radius = 86;
+  const axisPoints = domains.map((domain, index) => {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / domains.length;
+    const ratio = domain.max ? domain.score / domain.max : 0;
+    return {
+      ...domain,
+      x: center + Math.cos(angle) * radius * ratio,
+      y: center + Math.sin(angle) * radius * ratio,
+      axisX: center + Math.cos(angle) * radius,
+      axisY: center + Math.sin(angle) * radius,
+      labelX: center + Math.cos(angle) * (radius + 25),
+      labelY: center + Math.sin(angle) * (radius + 25),
+    };
+  });
+  const polygon = axisPoints.map((point) => `${point.x},${point.y}`).join(' ');
+  const gridPolygon = axisPoints.map((point) => `${point.axisX},${point.axisY}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto h-72 w-full max-w-xs">
+      <polygon points={gridPolygon} fill="none" stroke="#cbd5e1" strokeWidth="1.5" />
+      {axisPoints.map((point) => <line key={point.key} x1={center} y1={center} x2={point.axisX} y2={point.axisY} stroke="#e2e8f0" />)}
+      <polygon points={polygon} fill="rgba(37, 99, 235, 0.22)" stroke="#2563eb" strokeWidth="3" />
+      {axisPoints.map((point) => <circle key={`${point.key}-dot`} cx={point.x} cy={point.y} r="4" fill="#2563eb" />)}
+      {axisPoints.map((point) => (
+        <text key={`${point.key}-label`} x={point.labelX} y={point.labelY} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontWeight="700" fill="#475569">
+          {point.label.split(' ')[0]}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+function EvolutionChart({ comparison }) {
+  const pre = comparison.preTotal;
+  const post = comparison.postTotal;
+  if (pre === null || pre === undefined || post === null || post === undefined) {
+    return <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-bold text-slate-600">Comparación pendiente: se requiere pretest y postest revisados para el mismo participante.</div>;
+  }
+  const deltaText = comparison.delta > 0 ? `+${comparison.delta}` : `${comparison.delta}`;
+  return (
+    <div className="rounded-xl border bg-white p-4">
+      <div className="grid gap-3">
+        {[['Pretest', pre], ['Postest', post]].map(([label, value]) => (
+          <div key={label}>
+            <div className="mb-1 flex justify-between text-xs font-bold text-slate-600"><span>{label}</span><span>{value}/30</span></div>
+            <div className="h-4 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.round((Number(value) / 30) * 100)}%` }} /></div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-center text-sm font-black text-slate-800">Cambio pre-post: {deltaText} punto(s)</p>
+    </div>
+  );
+}
+
+function DomainComparisonTable({ currentDomains, pairedDomains, selectedPhase }) {
+  if (!pairedDomains?.length) return null;
+  const pairedByKey = Object.fromEntries(pairedDomains.map((domain) => [domain.key, domain]));
+  return (
+    <div className="overflow-hidden rounded-xl border bg-white">
+      <table className="w-full text-left text-xs">
+        <thead className="bg-slate-100"><tr><th className="p-2">Dominio</th><th>Pretest</th><th>Postest</th><th>Cambio</th></tr></thead>
+        <tbody>{currentDomains.map((current) => {
+          const paired = pairedByKey[current.key];
+          const pre = selectedPhase === 'Pretest' ? current : paired;
+          const post = selectedPhase === 'Postest' ? current : paired;
+          if (!pre || !post) return null;
+          const delta = post.score - pre.score;
+          return <tr key={current.key} className="border-t"><td className="p-2 font-bold">{current.label}</td><td>{pre.score}/{pre.max}</td><td>{post.score}/{post.max}</td><td className={delta < 0 ? 'font-black text-red-700' : delta > 0 ? 'font-black text-green-700' : 'font-black text-slate-600'}>{delta > 0 ? `+${delta}` : delta}</td></tr>;
+        })}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function ItemHeatmap({ items }) {
+  const itemClass = (item) => {
+    const ratio = item.max ? item.score / item.max : 0;
+    if (ratio >= 1) return 'border-green-200 bg-green-50 text-green-900';
+    if (ratio > 0) return 'border-amber-200 bg-amber-50 text-amber-900';
+    return 'border-red-200 bg-red-50 text-red-900';
+  };
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {items.map((item) => (
+        <div key={item.label} className={`rounded-xl border p-3 text-xs ${itemClass(item)}`}>
+          <div className="flex justify-between gap-2"><strong>{item.label}</strong><span>{item.score}/{item.max}</span></div>
+          <p className="mt-1 opacity-80">{item.detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+const getParticipantDisplayName = (record) => record?.participant?.name || record?.consent?.participantName || 'Sin nombre';
+
+const getManualScoresForRecord = (record, currentCfg) => record?.manualScores || {
+  trail: 0,
+  copy: 0,
+  clock: 0,
+  naming: suggestedNamingScore(record, currentCfg),
+  repetition: suggestedRepetitionScore(record, currentCfg),
+  fluency: 0,
+  abstraction: suggestedAbstractionScore(record, currentCfg),
+};
+
+const buildAnalysisDataForRecord = (record, records = [], manualOverride = null) => {
+  if (!record) return null;
+  const selectedCfg = Object.values(VERSION_CONFIG).find((item) => item.version === record.version) || VERSION_CONFIG.Pretest;
+  const activeManual = manualOverride || getManualScoresForRecord(record, selectedCfg);
+  const objective = scoreObjective(record);
+  const finalScore = buildFinalScore({ ...record, manualScores: activeManual, evaluatorReviewed: true });
+  const domains = buildDomainScores(activeManual, objective);
+  const pairedRecord = findPairedRecord(records, record);
+  const pairedCfg = pairedRecord ? (Object.values(VERSION_CONFIG).find((item) => item.version === pairedRecord.version) || selectedCfg) : selectedCfg;
+  const pairedManual = pairedRecord ? getManualScoresForRecord(pairedRecord, pairedCfg) : null;
+  const pairedObjective = pairedRecord ? scoreObjective(pairedRecord) : null;
+  const pairedDomains = pairedRecord && pairedObjective ? buildDomainScores(pairedManual, pairedObjective) : [];
+  const comparison = buildPrePostComparison(record, finalScore, pairedRecord);
+  const interpretation = buildInterpretation(finalScore, domains, comparison);
+  const itemEvidence = buildItemEvidence({ ...record, objectiveScores: objective }, activeManual, selectedCfg);
+  return { selectedCfg, objective, finalScore, domains, pairedRecord, pairedDomains, comparison, interpretation, itemEvidence };
+};
+
+const latestByCreatedAt = (records = []) => [...records].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0] || null;
+
+const buildParticipantSummaries = (records = []) => {
+  const groups = new Map();
+  records.forEach((record) => {
+    const name = getParticipantDisplayName(record);
+    const key = normalize(name) || record.id;
+    if (!groups.has(key)) groups.set(key, { key, name, records: [] });
+    const group = groups.get(key);
+    group.name = group.name || name;
+    group.records.push(record);
+  });
+  return Array.from(groups.values()).map((group) => {
+    const preRecords = group.records.filter((record) => record.phase === 'Pretest');
+    const postRecords = group.records.filter((record) => record.phase === 'Postest');
+    const pre = latestByCreatedAt(preRecords);
+    const post = latestByCreatedAt(postRecords);
+    const latest = latestByCreatedAt(group.records);
+    const preTotal = getStoredFinalTotal(pre);
+    const postTotal = getStoredFinalTotal(post);
+    const latestTotal = getStoredFinalTotal(latest);
+    const delta = preTotal !== null && postTotal !== null ? postTotal - preTotal : null;
+    const classification = classifyTotal(latestTotal, latestTotal !== null);
+    return { ...group, pre, post, latest, preTotal, postTotal, latestTotal, delta, classification };
+  }).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+};
+
+function PowerBIResultsDashboard({ results, onOpenResults }) {
+  const summaries = buildParticipantSummaries(results);
+  const completed = results.filter((record) => record.finalScore?.complete && Number.isFinite(Number(record.finalScore.total)));
+  const average = completed.length ? (completed.reduce((sum, record) => sum + Number(record.finalScore.total), 0) / completed.length).toFixed(1) : '—';
+  const pairedCount = summaries.filter((item) => item.pre && item.post).length;
+  const alerts = summaries.filter((item) => item.latestTotal !== null && item.latestTotal < 26).length;
+  const expected = summaries.filter((item) => item.latestTotal !== null && item.latestTotal >= 26).length;
+  return (
+    <section className="rounded-3xl border bg-white p-5 shadow-xl">
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Tablero general tipo Power BI</p>
+          <h2 className="text-2xl font-black text-slate-900">Resultados integrados por participante</h2>
+          <p className="mt-1 text-sm text-slate-500">PANEG agrupa automáticamente pretest y postest cuando el nombre del participante coincide.</p>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="Participantes" value={summaries.length} note="Nombres únicos" />
+        <MetricCard label="Registros" value={results.length} note="Pretest + postest" />
+        <MetricCard label="Promedio" value={average === '—' ? '—' : `${average}/30`} note="Solo revisados" />
+        <MetricCard label="Pares pre-post" value={pairedCount} note="Seguimiento completo" />
+        <MetricCard label="Alertas" value={alerts} note={`${expected} en rango esperado`} className={alerts ? toneClasses.amber : toneClasses.green} />
+      </div>
+      <div className="mt-6 grid gap-5 xl:grid-cols-[1fr_360px]">
+        <div className="rounded-2xl border bg-slate-50 p-4">
+          <h3 className="font-black text-slate-900">Matriz de seguimiento</h3>
+          <div className="mt-3 max-h-[420px] overflow-auto rounded-xl border bg-white">
+            <table className="w-full min-w-[850px] text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-100 text-xs uppercase tracking-wide text-slate-500">
+                <tr><th className="p-3">Participante</th><th>Pretest</th><th>Postest</th><th>Cambio</th><th>Clasificación</th><th className="p-3">Acción</th></tr>
+              </thead>
+              <tbody>{summaries.map((summary) => {
+                const tone = summary.classification.tone === 'green' ? 'bg-green-50 text-green-800' : summary.classification.tone === 'amber' ? 'bg-amber-50 text-amber-800' : summary.classification.tone === 'red' ? 'bg-red-50 text-red-800' : 'bg-slate-50 text-slate-700';
+                return (
+                  <tr key={summary.key} className="border-t align-middle">
+                    <td className="p-3 font-black text-slate-900">{summary.name}<span className="block text-xs font-normal text-slate-400">{summary.records.length} registro(s)</span></td>
+                    <td className="font-bold">{summary.preTotal !== null ? `${summary.preTotal}/30` : '—'}</td>
+                    <td className="font-bold">{summary.postTotal !== null ? `${summary.postTotal}/30` : '—'}</td>
+                    <td className={summary.delta < 0 ? 'font-black text-red-700' : summary.delta > 0 ? 'font-black text-green-700' : 'font-black text-slate-600'}>{summary.delta === null ? '—' : summary.delta > 0 ? `+${summary.delta}` : summary.delta}</td>
+                    <td><span className={`rounded-full px-3 py-1 text-xs font-black ${tone}`}>{summary.classification.label}</span></td>
+                    <td className="p-3"><button type="button" onClick={() => onOpenResults(summary.post || summary.pre || summary.latest)} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-black text-white">Abrir detalle</button></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+            {summaries.length === 0 && <p className="p-10 text-center text-slate-500">Aún no hay resultados para visualizar.</p>}
+          </div>
+        </div>
+        <div className="rounded-2xl border bg-slate-50 p-4">
+          <h3 className="font-black text-slate-900">Distribución rápida</h3>
+          <div className="mt-4 space-y-4">
+            {[['Rango esperado', expected, summaries.length], ['Alertas / limítrofes', alerts, summaries.length], ['Pares completos', pairedCount, summaries.length]].map(([label, value, total]) => {
+              const pct = total ? Math.round((Number(value) / Number(total)) * 100) : 0;
+              return <div key={label}><div className="mb-1 flex justify-between text-xs font-bold text-slate-600"><span>{label}</span><span>{value}</span></div><div className="h-4 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-700" style={{ width: `${pct}%` }} /></div></div>;
+            })}
+          </div>
+          <p className="mt-5 rounded-xl bg-white p-3 text-sm text-slate-600">Use el botón Abrir detalle para desplegar abajo el panel explicable completo del participante. El listado superior se mantiene solo para revisión y eliminación.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ParticipantResultsDashboard({ record, records, manualOverride = null }) {
+  const data = buildAnalysisDataForRecord(record, records, manualOverride);
+  if (!data) return <PowerBIResultsDashboard results={records} onOpenResults={() => {}} />;
+  return (
+    <div className="space-y-5">
+      <DashboardAnalysisPanel record={record} selectedCfg={data.selectedCfg} finalScore={data.finalScore} domains={data.domains} pairedDomains={data.pairedDomains} comparison={data.comparison} itemEvidence={data.itemEvidence} interpretation={data.interpretation} />
+    </div>
+  );
+}
+
+function DashboardAnalysisPanel({ record, selectedCfg, finalScore, domains, pairedDomains, comparison, itemEvidence, interpretation }) {
+  const classification = interpretation.classification;
+  const tone = toneClasses[classification.tone] || toneClasses.slate;
+  return (
+    <section className="rounded-3xl border-2 border-slate-200 bg-slate-50 p-4 md:p-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Panel explicable PANEG</p>
+          <h3 className="mt-1 text-2xl font-black text-slate-900">Resumen, avance y análisis automático</h3>
+          <p className="mt-1 text-sm text-slate-600">{record.participant?.name} · {record.phase} · MoCA {record.version} · {selectedCfg.copyTitle}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => window.print()} className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-black text-white">Imprimir / guardar PDF</button>
+          <button type="button" onClick={() => downloadEvaluatorReport({ record, finalScore, domains, interpretation, comparison })} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-black text-white">Descargar reporte TXT</button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Total provisional" value={`${finalScore.total}/30`} note={`Base ${finalScore.base} + ajuste ${finalScore.educationAdjustment}`} />
+        <MetricCard label="Clasificación" value={classification.label} note="Tamizaje, no diagnóstico" className={tone} />
+        <MetricCard label="MIS" value={`${finalScore.objective?.mis ?? 0}/15`} note="Índice de memoria" />
+        <MetricCard label="Cambio pre-post" value={comparison.delta === null ? '—' : `${comparison.delta > 0 ? '+' : ''}${comparison.delta}`} note="Diferencia global" />
+      </div>
+
+      <div className={`mt-5 rounded-2xl border p-4 text-sm leading-relaxed ${tone}`}>
+        <p className="font-black">Análisis automático tipo IA</p>
+        <p className="mt-2">{interpretation.narrative}</p>
+        <p className="mt-2">{interpretation.recommendation}</p>
+        <p className="mt-2 text-xs opacity-80">PANEG no debe presentar el resultado como “daño cognitivo: sí/no”. Se reporta como alerta de tamizaje y requiere interpretación profesional.</p>
+      </div>
+
+      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_280px]">
+        <div className="rounded-2xl border bg-white p-4">
+          <h4 className="font-black text-slate-900">Puntaje por dominios</h4>
+          <div className="mt-4"><DomainBars domains={domains} /></div>
+        </div>
+        <div className="rounded-2xl border bg-white p-4">
+          <h4 className="font-black text-slate-900">Radar cognitivo</h4>
+          <DomainRadarChart domains={domains} />
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-5 xl:grid-cols-2">
+        <div className="rounded-2xl border bg-white p-4">
+          <h4 className="font-black text-slate-900">Evolución pretest-postest</h4>
+          <div className="mt-3"><EvolutionChart comparison={comparison} /></div>
+          <div className="mt-4"><DomainComparisonTable currentDomains={domains} pairedDomains={pairedDomains} selectedPhase={record.phase} /></div>
+        </div>
+        <div className="rounded-2xl border bg-white p-4">
+          <h4 className="font-black text-slate-900">Mapa de calor por reactivo</h4>
+          <div className="mt-3"><ItemHeatmap items={itemEvidence} /></div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="rounded-2xl border bg-white p-4 text-sm">
+          <h4 className="font-black text-slate-900">Fortalezas observadas</h4>
+          <p className="mt-2 text-slate-700">{interpretation.strengths.length ? interpretation.strengths.join('; ') : 'No se identifican dominios con desempeño ≥ 90% en esta revisión provisional.'}</p>
+        </div>
+        <div className="rounded-2xl border bg-white p-4 text-sm">
+          <h4 className="font-black text-slate-900">Áreas a revisar</h4>
+          <p className="mt-2 text-slate-700">{interpretation.alerts.length ? interpretation.alerts.join('; ') : 'No se identifican dominios por debajo de 75%.'}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -750,7 +1309,9 @@ export default function App() {
   const [evaluatorUnlocked, setEvaluatorUnlocked] = useState(false);
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [selectedAnalysis, setSelectedAnalysis] = useState(null);
   const [manual, setManual] = useState({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 });
+  const resultsDashboardRef = useRef(null);
 
   const cfg = VERSION_CONFIG[phase];
   const theme = cfg.theme === 'blue' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-teal-600 hover:bg-teal-700';
@@ -1233,14 +1794,20 @@ export default function App() {
     if (!selected) return;
     const payload = { ...selected, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now() };
     const finalScore = buildFinalScore(payload);
+    const domains = buildDomainScores(manual, finalScore.objective);
+    const pairedRecord = findPairedRecord(results, selected);
+    const comparison = buildPrePostComparison(selected, finalScore, pairedRecord);
+    const analyticSummary = buildInterpretation(finalScore, domains, comparison);
     await updateDoc(doc(db, ...RESULTS_PATH, selected.id), {
       manualScores: manual,
       evaluatorReviewed: true,
       reviewedAt: Date.now(),
       finalScore,
+      domainScores: domains,
+      analyticSummary,
       status: 'Revisado por evaluador',
     });
-    setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, status: 'Revisado por evaluador' }) : current);
+    setSelected((current) => current ? ({ ...current, manualScores: manual, evaluatorReviewed: true, reviewedAt: Date.now(), finalScore, domainScores: domains, analyticSummary, status: 'Revisado por evaluador' }) : current);
   };
 
   const progress = Math.round((step / totalSteps) * 100);
@@ -1336,21 +1903,59 @@ export default function App() {
     );
   }
 
+
+  const selectForProfessionalReview = (row) => {
+    const rowCfg = Object.values(VERSION_CONFIG).find((item) => item.version === row.version) || cfg;
+    setSelected(row);
+    setManual(row.manualScores || {
+      trail: 0,
+      copy: 0,
+      clock: 0,
+      naming: suggestedNamingScore(row, rowCfg),
+      repetition: suggestedRepetitionScore(row, rowCfg),
+      fluency: 0,
+      abstraction: suggestedAbstractionScore(row, rowCfg),
+    });
+  };
+
+  const openResultsDashboard = (row) => {
+    if (!row) return;
+    // Forzar actualización aun cuando se pulse dos veces el mismo registro
+    // y desplazar hacia el tablero inferior después de que React pinte el cambio.
+    setSelectedAnalysis({ ...row });
+    const scrollToDashboard = () => resultsDashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        scrollToDashboard();
+        window.setTimeout(scrollToDashboard, 180);
+      });
+    }
+  };
+
   if (screen === 'evaluator') {
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8">
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-[1500px]">
           <div className="mb-6 flex items-center justify-between">
-            <h1 className="text-3xl font-black">Panel de investigadores</h1>
-            <button onClick={() => { setEvaluatorUnlocked(false); setEvaluatorPassword(''); setSelected(null); setManual({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 }); setScreen('home'); }} className="rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Salir</button>
+            <div>
+              <h1 className="text-3xl font-black">Panel de investigadores</h1>
+              <p className="mt-1 text-sm text-slate-500">Revisión profesional arriba; tablero analítico integrado en la parte inferior.</p>
+            </div>
+            <button onClick={() => { setEvaluatorUnlocked(false); setEvaluatorPassword(''); setSelected(null); setSelectedAnalysis(null); setManual({ trail: 0, copy: 0, clock: 0, naming: 0, repetition: 0, fluency: 0, abstraction: 0 }); setScreen('home'); }} className="rounded-lg bg-slate-800 px-4 py-2 font-bold text-white">Salir</button>
           </div>
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]">
-            <div className="overflow-hidden rounded-2xl bg-white shadow">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-100"><tr><th className="p-4">Participante</th><th>Fase</th><th>Estado</th><th>Total</th><th className="p-4">Acciones</th></tr></thead>
-                <tbody>{results.map((row) => <tr key={row.id} className="border-t"><td className="p-4 font-bold">{row.participant?.name}<span className="block text-xs font-normal text-slate-400">{row.id}</span></td><td>{row.phase} · {row.version}</td><td>{row.status}</td><td className="font-black">{row.finalScore?.complete ? `${row.finalScore.total}/30` : "Pendiente"}</td><td className="p-4"><button onClick={() => { const rowCfg = Object.values(VERSION_CONFIG).find((item) => item.version === row.version) || cfg; setSelected(row); setManual(row.manualScores || { trail: 0, copy: 0, clock: 0, naming: suggestedNamingScore(row,rowCfg), repetition: suggestedRepetitionScore(row,rowCfg), fluency: 0, abstraction: suggestedAbstractionScore(row,rowCfg) }); }} className="mr-2 rounded bg-blue-600 px-3 py-2 font-bold text-white">Revisar</button><button onClick={() => deleteResult(row.id)} className="rounded bg-red-600 px-3 py-2 font-bold text-white">Eliminar</button></td></tr>)}</tbody>
-              </table>
-              {results.length === 0 && <p className="p-10 text-center text-slate-500">No hay registros.</p>}
+          <div className="grid gap-6 xl:grid-cols-[minmax(860px,1.35fr)_minmax(420px,0.65fr)]">
+            <div className="rounded-2xl bg-white shadow">
+              <div className="border-b p-4">
+                <h2 className="text-lg font-black">Listado de participantes</h2>
+                <p className="text-sm text-slate-500">Los registros se revisan desde la tabla. El tablero inferior permite abrir la vista detallada de resultados por participante.</p>
+              </div>
+              <div className="max-h-[52vh] overflow-y-auto overflow-x-hidden">
+                <table className="w-full table-fixed text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-100 text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-[32%] p-4">Participante</th><th className="w-[13%]">Fase</th><th className="w-[18%]">Estado</th><th className="w-[10%]">Total</th><th className="w-[27%] p-4">Acciones</th></tr></thead>
+                  <tbody>{results.map((row) => <tr key={row.id} className="border-t align-middle hover:bg-slate-50"><td className="p-4 font-bold"><span className="block truncate text-slate-900">{row.participant?.name}</span><span className="block truncate text-xs font-normal text-slate-400" title={row.id}>{row.id}</span></td><td className="font-bold">{row.phase}<span className="block text-xs font-normal text-slate-500">MoCA {row.version}</span></td><td className="pr-2">{row.status}</td><td className="font-black">{row.finalScore?.complete ? `${row.finalScore.total}/30` : "Pendiente"}</td><td className="p-4"><div className="flex flex-row flex-nowrap items-center justify-start gap-2"><button type="button" onClick={() => selectForProfessionalReview(row)} className="min-w-[86px] rounded-lg bg-blue-600 px-3 py-2 text-sm font-black text-white">Revisar</button><button type="button" onClick={() => deleteResult(row.id)} className="min-w-[86px] rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white">Eliminar</button></div></td></tr>)}</tbody>
+                </table>
+                {results.length === 0 && <p className="p-10 text-center text-slate-500">No hay registros.</p>}
+              </div>
             </div>
             <div className="max-h-[82vh] overflow-y-auto rounded-2xl bg-white p-6 shadow">
               {!selected ? <p className="text-slate-500">Seleccione un registro para revisar.</p> : <>
@@ -1360,6 +1965,13 @@ export default function App() {
                   const selectedCfg = Object.values(VERSION_CONFIG).find((item) => item.version === selected.version) || cfg;
                   const objective = scoreObjective(selected);
                   const provisional = buildFinalScore({ ...selected, manualScores: manual, evaluatorReviewed: true });
+                  const domains = buildDomainScores(manual, objective);
+                  const pairedRecord = findPairedRecord(results, selected);
+                  const pairedObjective = pairedRecord ? scoreObjective(pairedRecord) : null;
+                  const pairedDomains = pairedRecord?.manualScores && pairedObjective ? buildDomainScores(pairedRecord.manualScores, pairedObjective) : [];
+                  const comparison = buildPrePostComparison(selected, provisional, pairedRecord);
+                  const interpretation = buildInterpretation(provisional, domains, comparison);
+                  const itemEvidence = buildItemEvidence({ ...selected, objectiveScores: objective }, manual, selectedCfg);
                   return <div className="mt-5 space-y-6">
                     <section className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4">
                       <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-lg font-black">1. Visuoespacial / ejecutiva · Alternancia</h3><ScoreInput label="Alternancia" max={1} value={manual.trail} onChange={(value)=>setManual((c)=>({...c,trail:value}))}/></div>
@@ -1427,6 +2039,9 @@ export default function App() {
                 <button onClick={saveManualReview} className="mt-6 w-full rounded-xl bg-violet-600 py-3 font-black text-white">Guardar revisión y calcular total definitivo</button>
               </>}
             </div>
+          </div>
+          <div ref={resultsDashboardRef} className="mt-8">
+            {selectedAnalysis ? <div className="space-y-4"><button type="button" onClick={() => setSelectedAnalysis(null)} className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-black text-white">Volver al tablero general</button><ParticipantResultsDashboard record={selectedAnalysis} records={results} manualOverride={selected?.id === selectedAnalysis.id ? manual : null} /></div> : <PowerBIResultsDashboard results={results} onOpenResults={openResultsDashboard} />}
           </div>
         </div>
       </div>
